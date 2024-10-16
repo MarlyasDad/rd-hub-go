@@ -1,31 +1,40 @@
 package http
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+
+	httpmiddlewares "github.com/MarlyasDad/rd-hub-go/internal/transport/http/middlewares"
 )
 
-type HttpServer struct {
-	mux    *http.ServeMux
+type Server struct {
+	Mux    *http.ServeMux
 	server *http.Server
 }
 
-func New(config Config) HttpServer {
+func New(config Config) Server {
 	mux := http.NewServeMux()
 
-	return HttpServer{
-		mux:    mux,
-		server: &http.Server{Addr: fmt.Sprintf("%s:%d", config.server.Host, config.server.Port), Handler: middlewares.LoggingMiddlewareHandler(middlewares.EnableCors(mux))},
+	return Server{
+		Mux:    mux,
+		server: &http.Server{Addr: fmt.Sprintf("%s:%d", config.Host, config.Port), Handler: httpmiddlewares.LoggingMiddleware(httpmiddlewares.CorsMiddleware(mux))},
 	}
 }
 
-func Start() {
-	// Start webserver
-	log.Println("Starting Webserver")
+func (s Server) Start() {
 	go func() {
-		if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("Error starting server: %v", err)
 		}
 	}()
 }
+
+func (s Server) Stop() {
+	_ = s.server.Shutdown(context.Background())
+}
+
+//func (s Server) AddHandler(pattern string, handler http.Handler) {
+//	s.mux.Handle(pattern, handler)
+//}
