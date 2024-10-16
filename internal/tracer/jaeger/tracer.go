@@ -71,15 +71,15 @@ func newTraceProvider(exp *otlptrace.Exporter, serviceName string, traceIdRatioB
 	), nil
 }
 
-func InitTraceProvider(jaegerURL string, serviceName string, traceIdRatioBased float64) (*sdktrace.TracerProvider, error) {
-	ctx := context.Background()
+func InitTraceProvider(ctx context.Context, config Config, serviceName string) (*sdktrace.TracerProvider, error) {
+	// ctx := context.Background()
 
-	exporter, err := newExporter(ctx, jaegerURL)
+	exporter, err := newExporter(ctx, config.Endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("initialize exporter: %w", err)
 	}
 
-	tp, err := newTraceProvider(exporter, serviceName, traceIdRatioBased)
+	tp, err := newTraceProvider(exporter, serviceName, config.TraceIDRatioBased)
 	if err != nil {
 		return nil, fmt.Errorf("initialize provider: %w", err)
 	}

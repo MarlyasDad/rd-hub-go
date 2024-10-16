@@ -1,18 +1,19 @@
 package config
 
 import (
+	"github.com/MarlyasDad/rd-hub-go/internal/logger/zap"
+	"github.com/MarlyasDad/rd-hub-go/internal/transport/http"
 	"time"
 
 	"github.com/MarlyasDad/rd-hub-go/internal/clients/alor"
-	"github.com/MarlyasDad/rd-hub-go/internal/clients/telegram"
-	"github.com/MarlyasDad/rd-hub-go/internal/logger"
 	"github.com/MarlyasDad/rd-hub-go/internal/tracer/jaeger"
+	"github.com/MarlyasDad/rd-hub-go/internal/transport/telegram"
 )
 
 type (
 	EnvVars struct {
-		ApiHost               string    `envconfig:"rd_api_host"`
-		ApiPort               int64     `envconfig:"rd_api_port"`
+		ApiHost               string    `envconfig:"rd_server_host"`
+		ApiPort               int64     `envconfig:"rd_server_port"`
 		BrokerRefreshToken    string    `envconfig:"broker_refresh"`
 		BrokerRefreshTokenExp time.Time `envconfig:"broker_refresh_exp"`
 		BrokerDevCircuit      bool      `envconfig:"broker_dev_circuit" default:"true"`
@@ -22,16 +23,11 @@ type (
 		TelegramBotToken      string    `envconfig:"telegram_bot_token"`
 	}
 
-	serverConfig struct {
-		Host string
-		Port int64
-	}
-
 	Config struct {
-		Server   serverConfig
+		Server   http.Config
 		Broker   alor.Config
 		Tracer   jaeger.Config
-		Logger   logger.Config
+		Logger   zaplogger.Config
 		Telegram telegram.Config
 		// repository db_repo.Config
 	}
@@ -39,7 +35,7 @@ type (
 
 func NewConfig(f EnvVars) Config {
 	return Config{
-		Server: serverConfig{
+		Server: http.Config{
 			Host: f.ApiHost,
 			Port: f.ApiPort,
 		},
@@ -52,7 +48,7 @@ func NewConfig(f EnvVars) Config {
 			Endpoint:          f.OtelGrpcEndpoint,
 			TraceIDRatioBased: f.OtelRatioBased,
 		},
-		Logger: logger.Config{
+		Logger: zaplogger.Config{
 			Level: f.LogLevel,
 		},
 		Telegram: telegram.Config{

@@ -1,60 +1,89 @@
-package logger
+package zaplogger
 
 import (
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
-type Logger struct {
-	level  zap.AtomicLevel
-	logger *zap.Logger
-}
+type (
+	SugaredLogger struct {
+		level  zapcore.Level
+		logger *zap.SugaredLogger
+	}
 
-func getZapLogLevel(level int64) zap.AtomicLevel {
+	Logger struct {
+		level  zapcore.Level
+		logger *zap.Logger
+	}
+)
+
+func getZapLogLevel(level int64) zapcore.Level {
 	switch level {
 	case -1:
-		return zap.NewAtomicLevelAt(zap.DebugLevel)
+		return zap.DebugLevel
 	case 0:
-		return zap.NewAtomicLevelAt(zap.InfoLevel)
+		return zap.InfoLevel
 	case 1:
-		return zap.NewAtomicLevelAt(zap.WarnLevel)
+		return zap.WarnLevel
 	case 2:
-		return zap.NewAtomicLevelAt(zap.ErrorLevel)
+		return zap.ErrorLevel
 	case 3:
-		return zap.NewAtomicLevelAt(zap.DPanicLevel)
+		return zap.DPanicLevel
 	case 4:
-		return zap.NewAtomicLevelAt(zap.PanicLevel)
+		return zap.PanicLevel
 	case 5:
-		return zap.NewAtomicLevelAt(zap.FatalLevel)
+		return zap.FatalLevel
 	default:
-		return zap.NewAtomicLevelAt(zap.DebugLevel)
+		return zap.DebugLevel
 	}
 }
 
-func New(config Config) Logger {
-	loggerConfig := zap.NewProductionConfig()
+func New(config Config) (*zap.Logger, error) {
 	loggerLvl := getZapLogLevel(config.Level)
 
-	loggerConfig.OutputPaths = []string{"stdout"}
-	loggerConfig.Level = loggerLvl
+	var (
+		loggerDev     = false
+		loggerEnc     = "json"
+		LoggerEncConf = zap.NewProductionEncoderConfig()
+	)
 
-	logger, err := loggerConfig.Build()
+	// Changing configs to debug if loggerLvl == zap.DebugLevel
+	if config.Level < 0 {
+		loggerDev = true
+		loggerEnc = "console"
+		LoggerEncConf = zap.NewDevelopmentEncoderConfig()
+	}
+
+	loggerConfig := zap.Config{
+		Level:            zap.NewAtomicLevelAt(loggerLvl),
+		Development:      loggerDev,
+		Encoding:         loggerEnc,
+		EncoderConfig:    LoggerEncConf,
+		OutputPaths:      []string{"stdout"},
+		ErrorOutputPaths: []string{"stderr"},
+	}
+
+	logger, err := loggerConfig.Build(zap.AddCallerSkip(0))
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	logger.WithOptions()
-
-	// sugar := logger.Sugar()
-	// sugar.Infow("failed to fetch URL",
-	// 	// Structured context as loosely typed key-value pairs.
-	// 	"url", url,
-	// 	"attempt", 3,
-	// 	"backoff", time.Second,
-	// )
-	// sugar.Infof("Failed to fetch URL: %s", url)
-
-	return Logger{
-		level:  loggerLvl,
-		logger: logger,
-	}
+	return logger, nil
 }
+
+func NewSugared(config Config) (*zap.SugaredLogger, error) {
+	logger, err := New(config)
+	if err != nil {
+		return nil, err
+	}
+
+	return logger.Sugar(), nil
+}
+
+// sugar.Infow("failed to fetch URL",
+// 	// Structured context as loosely typed key-value pairs.
+// 	"url", url,
+// 	"attempt", 3,
+// 	"backoff", time.Second,
+// )
+// sugar.Infof("Failed to fetch URL: %s", url)
