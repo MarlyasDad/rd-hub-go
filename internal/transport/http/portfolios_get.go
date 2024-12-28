@@ -16,11 +16,6 @@ type (
 		name                     string
 		getPortfoliosListCommand getPortfoliosListCommand
 	}
-
-	//getPortfoliosListRequest struct {
-	//	// url params
-	//	TaskId uuid.UUID `validate:"uuid,required"`
-	//}
 )
 
 func NewPortfoliosListHandler(command getPortfoliosListCommand, name string) *GetPortfoliosListHandler {
@@ -33,19 +28,8 @@ func NewPortfoliosListHandler(command getPortfoliosListCommand, name string) *Ge
 func (h *GetPortfoliosListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var (
 		ctx = r.Context()
-		// requestData *getPortfoliosListRequest
 		err error
 	)
-
-	// if requestData, err = h.getRequestData(r); err != nil {
-	// 	GetErrorResponse(w, h.name, err, http.StatusBadRequest)
-	// 	return
-	// }
-
-	// if err = h.validateRequestData(requestData); err != nil {
-	// 	GetErrorResponse(w, h.name, err, http.StatusBadRequest)
-	// 	return
-	// }
 
 	portfoliosList, err := h.getPortfoliosListCommand.GetPortfoliosList(ctx)
 
@@ -54,28 +38,11 @@ func (h *GetPortfoliosListHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	taskJson, err := json.Marshal(portfoliosList)
+	portfoliosJson, err := json.Marshal(portfoliosList)
 	if err != nil {
 		GetErrorResponse(w, h.name, fmt.Errorf("json marshalling failed: %w", err), http.StatusInternalServerError)
 		return
 	}
 
-	GetSuccessResponseWithBody(w, taskJson)
+	GetSuccessResponseWithBody(w, portfoliosJson)
 }
-
-//func (h *GetTaskHandler) getRequestData(r *http.Request) (requestData *getTaskRequest, err error) {
-//	requestData = &getTaskRequest{}
-//
-//	taskId, err := uuid.Parse(r.PathValue("task_id"))
-//	if err != nil {
-//		return
-//	}
-//
-//	requestData.TaskId = taskId
-//
-//	return
-//}
-
-//func (h *GetTaskHandler) validateRequestData(requestData *getTaskRequest) error {
-//	return validator.New().Struct(requestData)
-//}

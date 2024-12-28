@@ -1,13 +1,13 @@
 package config
 
 import (
+	"github.com/MarlyasDad/rd-hub-go/internal/infra/jaeger"
 	"github.com/MarlyasDad/rd-hub-go/internal/logger/zap"
 	"github.com/MarlyasDad/rd-hub-go/internal/transport/http"
 	"time"
 
-	"github.com/MarlyasDad/rd-hub-go/internal/clients/alor"
-	"github.com/MarlyasDad/rd-hub-go/internal/tracer/jaeger"
 	"github.com/MarlyasDad/rd-hub-go/internal/transport/telegram"
+	"github.com/MarlyasDad/rd-hub-go/pkg/alor"
 )
 
 type (

@@ -31,11 +31,18 @@ compose-rs: ## remove previously and start new local env
 	GOBIN=$(LOCAL_BIN) go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
 	GOBIN=$(LOCAL_BIN) go install github.com/gojuno/minimock/v3/cmd/minimock@latest
 
-webpanel-dev:
-	cd webpanel && npm run dev
-
-run:
-	go run ./cmd/rd_gate/
-
-sqlc-generate:
+.PHONY: .sqlc-generate
+.sqlc-generate:
 	./bin/sqlc -f ./sqlc/sqlc.json generate
+
+.PHONY: .build
+.build:
+	go build -o bin/rd_hub ./cmd/rd_hub/
+
+.PHONY: .run
+.run:
+	go run ./cmd/rd_hub/
+
+.PHONY: .run-web
+.run-web:
+	cd web&& npm run dev

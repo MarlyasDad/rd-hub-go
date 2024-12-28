@@ -1,23 +1,23 @@
 package alor
 
 type (
-	AlorHosts struct {
+	Hosts struct {
 		Authorization, Data, Websocket string
 	}
 
-	AlorCircuits struct {
-		Production  AlorHosts
-		Development AlorHosts
+	Circuits struct {
+		Production  Hosts
+		Development Hosts
 	}
 )
 
-var circuits = AlorCircuits{
-	Production: AlorHosts{
+var circuits = Circuits{
+	Production: Hosts{
 		Authorization: "https://oauth.alor.ru",
 		Data:          "https://api.alor.ru",
 		Websocket:     "wss://api.alor.ru/ws",
 	},
-	Development: AlorHosts{
+	Development: Hosts{
 		Authorization: "https://oauthdev.alor.ru",
 		Data:          "https://apidev.alor.ru",
 		Websocket:     "wss://apidev.alor.ru/ws",

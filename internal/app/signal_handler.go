@@ -2,14 +2,15 @@ package app
 
 import (
 	"context"
-	"go.uber.org/zap"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 )
 
-func RunSignalHandler(ctx context.Context, wg *sync.WaitGroup, sugar *zap.SugaredLogger) context.Context {
+func RunSignalHandler(ctx context.Context, wg *sync.WaitGroup) context.Context {
 	sigterm := make(chan os.Signal, 1)
 	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
 
@@ -17,7 +18,7 @@ func RunSignalHandler(ctx context.Context, wg *sync.WaitGroup, sugar *zap.Sugare
 
 	wg.Add(1)
 	go func() {
-		defer sugar.Info("RD-Hub: [signal] terminate")
+		defer slog.Info("RD-Hub: [signal] terminate")
 		defer signal.Stop(sigterm)
 		defer wg.Done()
 		defer cancel()
@@ -26,19 +27,19 @@ func RunSignalHandler(ctx context.Context, wg *sync.WaitGroup, sugar *zap.Sugare
 			select {
 			case sig, ok := <-sigterm:
 				if !ok {
-					sugar.Infof("RD-Hub: [signal] signal chan closed: %s\n", sig.String())
+					slog.Info(fmt.Sprintf("RD-Hub: [signal] signal chan closed: %s\n", sig.String()))
 					return
 				}
 
-				sugar.Infof("RD-Hub: [signal] signal recv: %s", sig.String())
+				slog.Info(fmt.Sprintf("RD-Hub: [signal] signal recv: %s", sig.String()))
 				return
 			case _, ok := <-sigCtx.Done():
 				if !ok {
-					sugar.Info("RD-Hub: [signal] context closed")
+					slog.Info("RD-Hub: [signal] context closed")
 					return
 				}
 
-				sugar.Infof("RD-Hub: [signal] ctx done: %n", sigCtx.Err().Error())
+				slog.Info(fmt.Sprintf("RD-Hub: [signal] ctx done: %n", sigCtx.Err().Error()))
 				return
 			}
 		}

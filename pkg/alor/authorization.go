@@ -14,7 +14,18 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func NewAuthorization(host string, client http.Client, token Token) Authorization {
+func NewAuthorization(
+	host string,
+	client http.Client,
+	refresh string,
+	refreshExpiration time.Time,
+) Authorization {
+
+	token := Token{
+		Refresh:           refresh,
+		RefreshExpiration: refreshExpiration,
+	}
+
 	return Authorization{
 		Host:   host,
 		Token:  token,
@@ -51,7 +62,9 @@ func (a *Authorization) Refresh() error {
 		return err
 	}
 
-	defer res.Body.Close()
+	defer func() {
+		_ = res.Body.Close()
+	}()
 
 	if res.StatusCode == http.StatusForbidden {
 		log.Println("Forbidden!")
@@ -70,25 +83,7 @@ func (a *Authorization) Refresh() error {
 
 	a.Token.Acccess = r.AccessToken
 
-	claims := jwt.MapClaims{}
-
-	// Headers map[alg:ES256 typ:JWT] without kid
-	_, _, err = jwt.NewParser().ParseUnverified(a.Token.Acccess, claims)
-	if err != nil {
-		log.Println(err)
-
-		if err == jwt.ErrSignatureInvalid {
-			log.Println("Invalid Token Signature")
-			return err
-		}
-		return err
-	}
-
-	// for key, val := range claims {
-	// 	fmt.Printf("Key: %v, value: %v\n", key, val)
-	// }
-
-	tokenInfo, err := NewTokenInfo(claims)
+	tokenInfo, err := a.ParseTokenInfo()
 	if err != nil {
 		log.Println(err)
 		return err
@@ -99,8 +94,28 @@ func (a *Authorization) Refresh() error {
 	return nil
 }
 
-func NewTokenInfo(claims jwt.MapClaims) (TokenInfo, error) {
-	var info TokenInfo
+func (a *Authorization) ParseTokenInfo() (TokenInfo, error) {
+	var (
+		info   TokenInfo
+		claims jwt.MapClaims
+	)
+
+	// Headers map[alg:ES256 typ:JWT] without kid
+	_, _, err := jwt.NewParser().ParseUnverified(a.Token.Acccess, claims)
+	if err != nil {
+
+		if errors.Is(err, jwt.ErrSignatureInvalid) {
+			log.Println("Invalid Token Signature")
+			return TokenInfo{}, err
+		}
+
+		log.Println(err)
+		return TokenInfo{}, err
+	}
+
+	// for key, val := range claims {
+	// 	fmt.Printf("Key: %v, value: %v\n", key, val)
+	// }
 
 	ent, ok := claims["ent"].(string)
 	if !ok {
@@ -204,4 +219,11 @@ func parseClaimsInt(key string, m jwt.MapClaims) (*int64, error) {
 	}
 
 	return nil, fmt.Errorf("parse error: value %s is not int64", key)
+}
+
+func (a *Authorization) AccessToken() (string, error) {
+	// check expiration time
+	// if token expired call Refresh() func
+
+	return a.Token.Acccess, nil
 }
