@@ -29,6 +29,6 @@ jobs:
         run: ls -R bin/
 
       - name: Run-Unit-Test-Golang-App
-        run: go test
+        run: go test -race -vet=off ./...
 
 
