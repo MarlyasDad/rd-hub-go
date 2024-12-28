@@ -23,5 +23,5 @@ jobs:
         run: go mod download
 
       - name: Build-Golang-App
-        run: GOOS=linux go build -o bin/rd_hub ./cmd/rd_hub/ -v
+        run: GOOS=linux go build -o bin/rd_hub  -v ./cmd/rd_hub/
 
