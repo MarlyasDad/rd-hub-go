@@ -25,3 +25,10 @@ jobs:
       - name: Build-Golang-App
         run: GOOS=linux go build -o bin/rd_hub  -v ./cmd/rd_hub/
 
+      - name: Display-Build-Golang-App
+        run: ls -R bin/
+
+      - name: Run-Unit-Test-Golang-App
+        run: go test
+
+
