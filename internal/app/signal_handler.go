@@ -39,7 +39,7 @@ func RunSignalHandler(ctx context.Context, wg *sync.WaitGroup) context.Context {
 					return
 				}
 
-				slog.Info(fmt.Sprintf("RD-Hub: [signal] ctx done: %n", sigCtx.Err().Error()))
+				slog.Info(fmt.Sprintf("RD-Hub: [signal] ctx done: %s", sigCtx.Err().Error()))
 				return
 			}
 		}

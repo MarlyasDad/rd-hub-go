@@ -60,9 +60,9 @@ func (s *Scheduler) Stop() {
 	// ctx.Cancel()
 }
 
-func (s *Scheduler) NextGroup() {
-	s.TaskGroup = s.TaskGroup.Next()
-}
+//func (s *Scheduler) NextGroup() {
+//	s.TaskGroup = s.TaskGroup.Next()
+//}
 
 func (s *Scheduler) ThrowGroup() {
 	// ctx.Cancel()
