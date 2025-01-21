@@ -45,4 +45,8 @@ compose-rs: ## remove previously and start new local env
 
 .PHONY: .run-web
 .run-web:
-	cd web&& npm run dev
+	cd web && npm run dev
+
+.PHONY: .add-migration
+.add-migration:
+	cd migrations && ../bin/goose create $(MIGRATION_NAME) sql
