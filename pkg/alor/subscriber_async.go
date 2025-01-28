@@ -6,7 +6,7 @@ import (
 
 type AsyncSubscriber struct {
 	ID               uuid.UUID
-	queue            Queue
+	queue            *Queue
 	timeframe        Timeframe
 	notifier         Notifier // Чтобы отправлять уведомления
 	source           Source   // Чтобы делать заявки

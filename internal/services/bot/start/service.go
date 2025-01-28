@@ -51,5 +51,6 @@ func (h Service) Start(tgID int64, firstName string, lastName string, username s
 		}
 	}
 
-	return bot.Message, nil
+	// return bot.Message, nil
+	return "bot.Message", nil
 }
