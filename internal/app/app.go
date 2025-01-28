@@ -49,7 +49,7 @@ func NewApp(ctx context.Context, wg *sync.WaitGroup, config appconfig.Config) (*
 	// Telegram bot
 	bot, err := tgBot.New(ctx, config.Telegram)
 	if err != nil {
-		log.Println("Error: init telegram bot: %v", err)
+		log.Println(err)
 		os.Exit(1)
 	}
 
