@@ -6,7 +6,7 @@ import (
 	"github.com/MarlyasDad/rd-hub-go/internal/transport/http"
 	"time"
 
-	"github.com/MarlyasDad/rd-hub-go/internal/transport/telegram"
+	"github.com/MarlyasDad/rd-hub-go/internal/infra/telegram"
 	"github.com/MarlyasDad/rd-hub-go/pkg/alor"
 )
 

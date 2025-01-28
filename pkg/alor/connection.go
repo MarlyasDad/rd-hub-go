@@ -2,7 +2,6 @@ package alor
 
 import (
 	"context"
-	"log"
 	"net/http"
 )
 
@@ -35,7 +34,7 @@ func New(config Config) *Client {
 
 func (c *Client) Start(ctx context.Context) {
 	c.Authorization.Refresh()
-	log.Println(c.Authorization.Token.Info)
+	// log.Println(c.Authorization.Token.Info)
 	c.Websocket.Connect()
 }
 

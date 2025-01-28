@@ -56,7 +56,17 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT }}
           source: .
-          target: /home/rdgate/project/rd-hub/
+          target: ${{ secrets.PROJECT_LOCATION }};
+
+      - name: Restart service
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            echo ${{ secrets.PROJECT_LOCATION }};
+#              systemctl --user restart rd-hub;
 
 #      - name: Deploy to server
 #        uses: appleboy/ssh-action@v0.1.5

@@ -15,7 +15,7 @@
 *.out
 
 # Dependency directories (remove the comment below to include it)
-# vendor/
+vendor/
 
 # Go workspace file
 go.work
@@ -27,3 +27,4 @@ go.work.sum
 # idea
 .idea
 bin
+.vscode

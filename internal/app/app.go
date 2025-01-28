@@ -4,17 +4,15 @@ import (
 	"context"
 	"fmt"
 	appconfig "github.com/MarlyasDad/rd-hub-go/internal/config"
-	"github.com/go-co-op/gocron/v2"
+	"github.com/MarlyasDad/rd-hub-go/pkg/scheduler"
 	"go.uber.org/zap"
 	"go.uber.org/zap/exp/zapslog"
 	"log"
+	"os"
 
-	// jaegertracer "github.com/MarlyasDad/rd-hub-go/internal/infra/jaeger"
+	tgBot "github.com/MarlyasDad/rd-hub-go/internal/infra/telegram"
 	httpTransport "github.com/MarlyasDad/rd-hub-go/internal/transport/http"
-	tgTransport "github.com/MarlyasDad/rd-hub-go/internal/transport/telegram"
 	"github.com/MarlyasDad/rd-hub-go/pkg/alor"
-	// ops_counter "github.com/MarlyasDad/rd-hub-go/pkg/ops-counter"
-	// "go.uber.org/zap"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -25,15 +23,11 @@ type (
 		ctx        context.Context
 		wg         *sync.WaitGroup
 		config     appconfig.Config
-		scheduler  gocron.Scheduler
+		scheduler  *scheduler.Scheduler
 		broker     *alor.Client
-		tgBot      tgTransport.TgClient
+		tgBot      tgBot.TgClient
 		httpServer httpTransport.Server
 		zapLogger  *zap.Logger
-		// traceProvider *jaegertracer.TracerProvider
-		// repository    repository
-		// hub           wsHub
-		// websocketServer wsServer
 	}
 )
 
@@ -42,31 +36,24 @@ func NewApp(ctx context.Context, wg *sync.WaitGroup, config appconfig.Config) (*
 	logger := slog.New(zapslog.NewHandler(zapL.Core(), nil))
 	slog.SetDefault(logger)
 
-	//traceProvider, err := jaegertracer.InitTraceProvider(ctx, config.Tracer, "RD-Hub Trading Platform")
-	//if err != nil {
-	//	log.Fatal("init trace provider error", err)
-	//}
-
-	// tracer := traceProvider.Tracer("rd-hub-go tracer")
-
 	// create a scheduler
-	s, err := gocron.NewScheduler()
+	s, err := scheduler.NewScheduler()
 	if err != nil {
-		// handle error
+		log.Fatal(err)
 	}
-
-	// Создать задание присылать каждые 9 утра состояние счёта
 	fmt.Println(s)
 
 	// create a broker connection
 	brokerConn := alor.New(config.Broker)
 
 	// Telegram bot
-	//bot, err := telegramTransport.New(ctx, config.Telegram)
-	//if err != nil {
-	//	slog.Error("init telegram bot: %v", err)
-	//	os.Exit(1)
-	//}
+	bot, err := tgBot.New(ctx, config.Telegram)
+	if err != nil {
+		slog.Error("init telegram bot: %v", err)
+		os.Exit(1)
+	}
+
+	// bot.AddHandler("start", tgBot.NewStartAdapter(startService.New(ctx, repo)))
 
 	// Http server
 	httpServer := httpTransport.New(config.Server)
@@ -77,22 +64,30 @@ func NewApp(ctx context.Context, wg *sync.WaitGroup, config appconfig.Config) (*
 	httpFileServer := http.FileServer(http.Dir("./web/dist/assets"))
 	httpServer.Mux.Handle("GET /assets/", http.StripPrefix("/assets/", httpFileServer))
 
-	// Statistic
-	// опрашивает все системы и выдаёт общую статистику в виде json
-	httpServer.Mux.HandleFunc("GET /statistics/", func(w http.ResponseWriter, r *http.Request) {})
-
 	// Portfolios
-	// httpServer.Mux.HandleFunc("GET /portfolios/", httpTransport.NewPortfoliosListHandler())
-	httpServer.Mux.HandleFunc("GET /portfolios/{portfolio}/", func(w http.ResponseWriter, r *http.Request) {})
+	httpServer.Mux.HandleFunc("GET /api/v1/portfolios/", func(w http.ResponseWriter, r *http.Request) {})
+	httpServer.Mux.HandleFunc("GET /api/v1/portfolios/{portfolio}/", func(w http.ResponseWriter, r *http.Request) {})
 
-	// httpServer.Mux.Handle("GET /counters/", appHttp.NewMetricsHandler())
 	// Depth of market
-	httpServer.Mux.HandleFunc("GET /order-book/{security}/", func(w http.ResponseWriter, r *http.Request) {})
-	// websocket management
-	httpServer.Mux.HandleFunc("POST /order-book/streaming/subscribe/", func(w http.ResponseWriter, r *http.Request) {})
-	httpServer.Mux.HandleFunc("POST /order-book/streaming/unsubscribe/", func(w http.ResponseWriter, r *http.Request) {})
+	httpServer.Mux.HandleFunc("GET /api/v1/order-book/{security}/", func(w http.ResponseWriter, r *http.Request) {})
 
-	// Websocket server handler if exists
+	// Subscribers
+	// Создаём подписчика и подписываем его на необходимые инструменты
+	// Все инструкции передаём через тело запроса в формате JSON
+	httpServer.Mux.HandleFunc("POST /api/v1/subscribers/subscribe/", func(w http.ResponseWriter, r *http.Request) {})
+	// Удаляем подписчика по его ID
+	httpServer.Mux.HandleFunc("DELETE /api/v1/subscribers/unsubscribe/{subscriber_id}/", func(w http.ResponseWriter, r *http.Request) {})
+	// Получаем список активных подписчиков
+	httpServer.Mux.HandleFunc("GET /api/v1/subscribers/", func(w http.ResponseWriter, r *http.Request) {})
+	// Получаем информацию об активном подписчике
+	httpServer.Mux.HandleFunc("GET /api/v1/subscribers/{subscriber_id}/", func(w http.ResponseWriter, r *http.Request) {})
+
+	// Websocket client
+	// Получаем количество необработанных сообщений в очереди
+	httpServer.Mux.HandleFunc("GET /api/v1/stream/queue-status/", func(w http.ResponseWriter, r *http.Request) {})
+
+	// Messages
+	// Отправить сообщение всем активным клиентам
 
 	// Merge all components into app
 	return &App{
@@ -103,8 +98,7 @@ func NewApp(ctx context.Context, wg *sync.WaitGroup, config appconfig.Config) (*
 		broker:     brokerConn,
 		httpServer: httpServer,
 		zapLogger:  zapL,
-		// traceProvider: traceProvider,
-		// telegramBot:   bot,
+		tgBot:      bot,
 	}, nil
 }
 
@@ -116,7 +110,7 @@ func (a *App) Start() error {
 	// Начинаем принимать команды от http
 	a.httpServer.Start()
 	// Начинаем принимать команды от telegram
-	err := a.tgBot.Start()
+	err := a.tgBot.Start(a.ctx)
 	if err != nil {
 		return err
 	}
