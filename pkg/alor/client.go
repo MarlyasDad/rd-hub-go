@@ -3,6 +3,7 @@ package alor
 import (
 	"context"
 	"net/http"
+	"sync"
 )
 
 type Client struct {
@@ -11,6 +12,7 @@ type Client struct {
 	Authorization Authorization
 	Client        *http.Client
 	Websocket     *Websocket
+	mu            *sync.Mutex
 }
 
 func New(config Config) *Client {

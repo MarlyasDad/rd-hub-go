@@ -6,6 +6,38 @@ import (
 	"github.com/google/uuid"
 )
 
+type OrderSide string
+
+var (
+	SellSide OrderSide = "Sell"
+	BuySide  OrderSide = "Buy"
+)
+
+type Opcode string
+
+var (
+	OrderBookOpcode     Opcode = "OrderBookGetAndSubscribe"     // Подписка на биржевой стакан
+	BarsOpcode          Opcode = "BarsGetAndSubscribe"          // Подписка на историю цен (свечи)
+	Quotes              Opcode = "QuotesSubscribe"              // Подписка на информацию о котировках
+	InstrumentsOpcode   Opcode = "InstrumentsGetAndSubscribeV2" // Подписка на изменение информации о финансовых инструментах на выбранной бирже
+	AllTradesOpcode     Opcode = "AllTradesGetAndSubscribe"     // Подписка на все сделки
+	PositionsOpcode     Opcode = "PositionsGetAndSubscribeV2"   // Подписка на информацию о текущих позициях по торговым инструментам и деньгам
+	SummariesOpcode     Opcode = "SummariesGetAndSubscribeV2"   // Подписка на сводную информацию по портфелю
+	RisksOpcode         Opcode = "RisksGetAndSubscribe"         // Подписка на сводную информацию по портфельным рискам
+	SpectralRisksOpcode Opcode = "SpectraRisksGetAndSubscribe"  // Подписка на информацию по рискам срочного рынка (FORTS)
+	TradesOpcode        Opcode = "TradesGetAndSubscribeV2"      // Подписка на информацию о сделках
+	OrdersOpcode        Opcode = "OrdersGetAndSubscribeV2"      // Подписка на информацию о текущих заявках на рынке для выбранных биржи и финансового инструмента
+	StopOrdersOpcode    Opcode = "StopOrdersGetAndSubscribeV2"  // Подписка на информацию о текущих заявках на рынке для выбранных биржи и финансового инструмента
+	UnsubscribeOpcode   Opcode = "Unsubscribe"                  // Отмена существующей подписки
+)
+
+type Exchange string
+
+var (
+	MOEXExchange Exchange = "MOEX"
+	SPBXExchange Exchange = "SPBX"
+)
+
 type ResponseFormat string
 
 var (
@@ -92,7 +124,7 @@ func (c *Client) OrderBooksSubscribe(subscriberID uuid.UUID, exchange Exchange, 
 		return err
 	}
 
-	c.Websocket.AddSubscriberToList(subscriberID, request.Guid)
+	c.AddSubscription(subscriberID, request.Guid)
 	return nil
 }
 
@@ -197,7 +229,7 @@ func (c *Client) AllTradesSubscribe(subscriberID uuid.UUID, exchange Exchange, c
 		return err
 	}
 
-	c.Websocket.AddSubscriberToList(subscriberID, request.Guid)
+	c.AddSubscription(subscriberID, request.Guid)
 	return nil
 }
 
@@ -302,7 +334,7 @@ func (c *Client) BarsSubscribe(subscriberID uuid.UUID, exchange Exchange, code s
 		return err
 	}
 
-	c.Websocket.AddSubscriberToList(subscriberID, request.Guid)
+	c.AddSubscription(subscriberID, request.Guid)
 	return nil
 }
 
@@ -339,11 +371,22 @@ type UnsubscribeRequest struct {
 	GUID   string `json:"guid"`
 }
 
-func (c *Client) Unsubscribe(guid string) error {
+func (c *Client) Unsubscribe(subscriberID uuid.UUID, guid string) error {
 	token, err := c.Authorization.AccessToken()
 	if err != nil {
 		return err
 	}
+
+	err = c.RemoveSubscription(subscriberID, guid)
+	if err != nil {
+		return err
+	}
+
+	if len(c.Websocket.subscriptions[guid]) > 0 {
+		return nil
+	}
+
+	delete(c.Websocket.subscriptions, guid)
 
 	request := UnsubscribeRequest{
 		Opcode: UnsubscribeOpcode,
@@ -363,3 +406,15 @@ func (c *Client) Unsubscribe(guid string) error {
 Остальные подписки реализовать по подобию
 Trades, Quotes, ......
 */
+
+func (c *Client) AddSubscription(subscriberID uuid.UUID, guid string) {
+	c.Websocket.AddSubscription(subscriberID, guid)
+}
+
+func (c *Client) RemoveSubscription(subscriberID uuid.UUID, guid string) error {
+	return c.Websocket.RemoveSubscription(subscriberID, guid)
+}
+
+func (c *Client) RemoveAllSubscriberSubscriptions(subscriberID uuid.UUID) error {
+	return c.Websocket.RemoveAllSubscriberSubscriptions(subscriberID)
+}

@@ -38,13 +38,13 @@ type SyncSubscriber struct {
 	orderBookHandler func() error     // Чтобы обрабатывать стаканы
 	orderHandler     func() error     // Чтобы обрабатывать обезличенные сделки
 	bars             map[string][]Bar // bar
-	orderBook        OrderBook        // orderBook
 	indicators       []string         // indicator
 	autoBarMake      bool
 	depthOfMarket    bool
 	marketProfile    bool
 	delta            bool
 	ready            bool
+	// orderBook        OrderBook        // orderBook
 }
 
 func (s SyncSubscriber) GetID() uuid.UUID {

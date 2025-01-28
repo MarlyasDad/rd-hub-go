@@ -44,7 +44,7 @@ func NewApp(ctx context.Context, wg *sync.WaitGroup, config appconfig.Config) (*
 	fmt.Println(s)
 
 	// create a broker connection
-	brokerConn := alor.New(config.Broker)
+	brokerClient := alor.New(config.Broker)
 
 	// Telegram bot
 	bot, err := tgBot.New(ctx, config.Telegram)
@@ -89,13 +89,18 @@ func NewApp(ctx context.Context, wg *sync.WaitGroup, config appconfig.Config) (*
 	// Messages
 	// Отправить сообщение всем активным клиентам
 
+	// тестовый подписчик
+	testSubscriber := alor.NewSyncSubscriber(alor.M1Timeframe, nil, nil) // name?
+	// добавляем подписчика в клиент
+	brokerClient.Websocket.AddSubscriber(testSubscriber)
+
 	// Merge all components into app
 	return &App{
 		ctx:        ctx,
 		wg:         wg,
 		config:     config,
 		scheduler:  s,
-		broker:     brokerConn,
+		broker:     brokerClient,
 		httpServer: httpServer,
 		zapLogger:  zapL,
 		tgBot:      bot,

@@ -2,8 +2,10 @@ package alor
 
 import (
 	"encoding/json"
+	"errors"
 	"github.com/google/uuid"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -25,9 +27,10 @@ type Websocket struct {
 	conn          *websocket.Conn
 	queue         Queue
 	done          chan interface{}
-	subscriptions map[string][]uuid.UUID
 	subscribers   map[uuid.UUID]Subscriber
-	counter       Counter
+	subscriptions map[string][]uuid.UUID
+	mu            sync.Mutex
+	// counter       Counter
 }
 
 func (ws *Websocket) runWebsocketLoop(connection *websocket.Conn) {
@@ -42,12 +45,6 @@ func (ws *Websocket) runWebsocketLoop(connection *websocket.Conn) {
 		// Обрабатываем входящее сообщение
 		_ = ws.HandleResponse(msg)
 	}
-
-	// err := conn.WriteMessage(websocket.TextMessage, []byte("Hello from GolangDocs!"))
-	// if err != nil {
-	// 	log.Println("Error during writing to websocket:", err)
-	// 	return
-	// }
 }
 
 func (ws *Websocket) Connect() {
@@ -83,37 +80,8 @@ func (ws *Websocket) Disconnect() {
 	_ = ws.conn.Close()
 }
 
-func (ws *Websocket) AddSubscriberToList(subscriberID uuid.UUID, guid string) {
-	_, ok := ws.subscriptions[guid]
-	if !ok {
-		ws.subscriptions[guid] = make([]uuid.UUID, 0)
-	}
-
-	ws.subscriptions[guid] = append(ws.subscriptions[guid], subscriberID)
-}
-
 func (ws *Websocket) SendMessage(msg []byte) error {
 	return ws.conn.WriteMessage(websocket.TextMessage, msg)
-}
-
-func (ws *Websocket) Unsubscribe(subscriberID uuid.UUID, guid string) {
-	_, ok := ws.subscriptions[guid]
-	if !ok {
-		return
-	}
-
-	ws.subscriptions[guid] = ws.RemoveSubscriber(ws.subscriptions[guid], subscriberID)
-
-	return
-}
-
-func (ws *Websocket) RemoveSubscriber(list []uuid.UUID, item uuid.UUID) []uuid.UUID {
-	for i, v := range list {
-		if v == item {
-			list = append(list[:i], list[i+1:]...)
-		}
-	}
-	return list
 }
 
 // HandleResponse
@@ -137,6 +105,7 @@ func (ws *Websocket) HandleResponse(msg []byte) error {
 
 	opcode := BarsOpcode // from guid
 
+	// QueueItem? QueueEvent?
 	event := Event{
 		Opcode: opcode,
 		Guid:   response.Guid,
@@ -150,33 +119,6 @@ func (ws *Websocket) HandleResponse(msg []byte) error {
 
 	return nil
 }
-
-// Подписка на стакан
-// {
-// "opcode": "OrderBookGetAndSubscribe",
-// "code": "SBER",
-// "depth": 10,
-// "exchange": "MOEX",
-// "format": "Simple",
-// "frequency": 0,
-// "guid": "c328fcf1-e495-408a-a0ed-e20f95d6b813",
-// "token": "eyJhbGciOiJ..."
-// }
-
-// Минимальное значение параметра Frequency зависит от выбранного формата возвращаемого JSON-объекта:
-// Simple — 25 миллисекунд
-// Slim — 10 миллисекунд
-// Heavy — 500 миллисекунд
-//type Request struct {
-//	Token     string         `json:"token"`               // Access Токен для авторизации запроса
-//	Code      string         `json:"code"`                // Код финансового инструмента (Тикер)
-//	Depth     int            `json:"depth,omitempty"`     // Глубина стакана. Стандартное и максимальное значение — 20 (20х20).
-//	Exchange  Exchange       `json:"exchange,omitempty"`  // Биржа
-//	Format    ResponseFormat `json:"format"`              // Формат представления возвращаемых данных
-//	Frequency int            `json:"frequency,omitempty"` // Частота (интервал) передачи данных сервером. Сервер вернёт последние данные по запросу за тот временной интервал, который указан в качестве значения параметра. Пример: биржа передаёт данные каждые 2 мс, но, при значении параметра 10 мс, сервер вернёт только последнее значение, отбросив предыдущие.
-//	Opcode    Opcode         `json:"opcode"`              // Код выполняемой операции
-//	Guid      string         `json:"guid"`                // Не более 50 символов. Уникальный идентификатор сообщений создаваемой подписки. Все входящие сообщения, соответствующие этой подписке, будут иметь такое значение поля guid
-//}
 
 // {
 // "message": "Handled successfully",
@@ -197,26 +139,66 @@ type WsResponse struct {
 	Guid        string          `json:"guid"`
 }
 
-type AllTradesData struct {
-	Data struct {
-		Id        int64     `json:"id"`
-		Orderno   int64     `json:"orderno"`
-		Symbol    string    `json:"symbol"`
-		Board     string    `json:"board"`
-		Qty       int64     `json:"qty"`
-		Price     float64   `json:"price"`
-		Time      time.Time `json:"time"`
-		Timestamp int64     `json:"timestamp"`
-		Oi        int64     `json:"oi"`
-		Existing  bool      `json:"existing"`
-		Side      OrderSide `json:"side"`
-	} `json:"data"`
-	Guid string `json:"guid"`
+func (ws *Websocket) AddSubscription(subscriberID uuid.UUID, guid string) {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	_, ok := ws.subscriptions[guid]
+	if !ok {
+		ws.subscriptions[guid] = make([]uuid.UUID, 0)
+	}
+
+	ws.subscriptions[guid] = append(ws.subscriptions[guid], subscriberID)
 }
 
-type OrderSide string
+func (ws *Websocket) RemoveSubscription(subscriberID uuid.UUID, guid string) error {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
 
-var (
-	SellSide OrderSide = "Sell"
-	BuySide  OrderSide = "Buy"
-)
+	_, ok := ws.subscriptions[guid]
+	if !ok {
+		return errors.New("the subscription is not exists")
+	}
+
+	for i, v := range ws.subscriptions[guid] {
+		if v == subscriberID {
+			ws.subscriptions[guid] = append(ws.subscriptions[guid][:i], ws.subscriptions[guid][i+1:]...)
+		}
+	}
+
+	return nil
+}
+
+func (ws *Websocket) RemoveAllSubscriberSubscriptions(subscriberID uuid.UUID) error {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	for key, _ := range ws.subscriptions {
+		_, ok := ws.subscriptions[key]
+		if !ok {
+			continue
+		}
+
+		for i, v := range ws.subscriptions[key] {
+			if v == subscriberID {
+				ws.subscriptions[key] = append(ws.subscriptions[key][:i], ws.subscriptions[key][i+1:]...)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (ws *Websocket) AddSubscriber(subscriber Subscriber) {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	// err := subscriber.Init()
+}
+
+func (ws *Websocket) RemoveSubscriber(subscriberID uuid.UUID) {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	// err := subscriber.DeInit()
+}
