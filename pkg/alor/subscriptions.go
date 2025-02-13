@@ -6,6 +6,22 @@ import (
 	"github.com/google/uuid"
 )
 
+type Subscription struct {
+	Exchange        Exchange
+	Code            string
+	Board           string
+	Tf              Timeframe
+	Opcode          Opcode
+	Depth           int
+	From            int
+	SkipHistory     bool
+	SplitAdjust     bool
+	InstrumentGroup string
+	Format          ResponseFormat
+	Guid            string
+	Ready           bool
+}
+
 type OrderSide string
 
 var (
@@ -77,12 +93,12 @@ type OrderBookRequest struct {
 	Guid      string         `json:"guid"`                // Не более 50 символов. Уникальный идентификатор сообщений создаваемой подписки. Все входящие сообщения, соответствующие этой подписке, будут иметь такое значение поля guid
 }
 
-func (c *Client) OrderBooksSubscribe(subscriberID uuid.UUID, exchange Exchange, code string, depth int, format ResponseFormat) error {
+func (c *Client) OrderBooksSubscribe(subscriberID uuid.UUID, exchange Exchange, code string, depth int, format ResponseFormat) (string, error) {
 	opcode := OrderBookOpcode
 	guid := fmt.Sprintf("%s-%s-%s-%d-%s", exchange, code, opcode, depth, format)
 	token, err := c.Authorization.AccessToken()
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if depth > 50 || depth == 0 {
@@ -116,16 +132,16 @@ func (c *Client) OrderBooksSubscribe(subscriberID uuid.UUID, exchange Exchange, 
 
 	requestBytes, err := json.Marshal(request)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	err = c.Websocket.SendMessage(requestBytes)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	c.AddSubscription(subscriberID, request.Guid)
-	return nil
+	return request.Guid, nil
 }
 
 type OrderBookSimpleData struct {
@@ -182,12 +198,12 @@ type AllTradesRequest struct {
 	Token                string         `json:"token"`                // Access Токен для авторизации запроса
 }
 
-func (c *Client) AllTradesSubscribe(subscriberID uuid.UUID, exchange Exchange, code string, depth int, format ResponseFormat) error {
+func (c *Client) AllTradesSubscribe(subscriberID uuid.UUID, exchange Exchange, code string, depth int, format ResponseFormat) (string, error) {
 	opcode := AllTradesOpcode
 	guid := fmt.Sprintf("%s-%s-%s-%s", exchange, code, opcode, format)
 	token, err := c.Authorization.AccessToken()
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	if depth > 50 || depth == 0 {
@@ -221,16 +237,16 @@ func (c *Client) AllTradesSubscribe(subscriberID uuid.UUID, exchange Exchange, c
 
 	requestBytes, err := json.Marshal(request)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	err = c.Websocket.SendMessage(requestBytes)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	c.AddSubscription(subscriberID, request.Guid)
-	return nil
+	return request.Guid, nil
 }
 
 type AllTradesSimpleData struct {
@@ -287,12 +303,12 @@ type BarsRequest struct {
 	Token           string         `json:"token"`               // Access Токен для авторизации запроса
 }
 
-func (c *Client) BarsSubscribe(subscriberID uuid.UUID, exchange Exchange, code string, tf Timeframe, from int, skipHistory bool, splitAdjust bool, instrumentGroup string, format ResponseFormat) error {
+func (c *Client) BarsSubscribe(subscriberID uuid.UUID, exchange Exchange, code string, tf Timeframe, from int, skipHistory bool, splitAdjust bool, instrumentGroup string, format ResponseFormat) (string, error) {
 	opcode := BarsOpcode
-	guid := fmt.Sprintf("%s-%s-%s-%s", exchange, code, opcode, format)
+	guid := fmt.Sprintf("%s-%s-%d-%s-%s", exchange, code, tf, opcode, format)
 	token, err := c.Authorization.AccessToken()
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	var frequency int
@@ -326,16 +342,16 @@ func (c *Client) BarsSubscribe(subscriberID uuid.UUID, exchange Exchange, code s
 
 	requestBytes, err := json.Marshal(request)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	err = c.Websocket.SendMessage(requestBytes)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	c.AddSubscription(subscriberID, request.Guid)
-	return nil
+	return request.Guid, nil
 }
 
 type BarsSimpleData struct {
@@ -382,11 +398,11 @@ func (c *Client) Unsubscribe(subscriberID uuid.UUID, guid string) error {
 		return err
 	}
 
-	if len(c.Websocket.subscriptions[guid]) > 0 {
+	if len(c.Websocket.subscriptions[GUID(guid)].Items) > 0 {
 		return nil
 	}
 
-	delete(c.Websocket.subscriptions, guid)
+	delete(c.Websocket.subscriptions, GUID(guid))
 
 	request := UnsubscribeRequest{
 		Opcode: UnsubscribeOpcode,
@@ -417,4 +433,49 @@ func (c *Client) RemoveSubscription(subscriberID uuid.UUID, guid string) error {
 
 func (c *Client) RemoveAllSubscriberSubscriptions(subscriberID uuid.UUID) error {
 	return c.Websocket.RemoveAllSubscriberSubscriptions(subscriberID)
+}
+
+func (c *Client) AddSubscriber(subscriber *Subscriber) {
+	c.Websocket.AddSubscriber(subscriber)
+	// Записать guid в subscription
+	// Записать статус подписки
+
+	var guid string
+
+	for key, subscription := range subscriber.subscriptions {
+		switch subscription.Opcode {
+		case BarsOpcode:
+			guid, _ = c.BarsSubscribe(
+				subscriber.ID,
+				subscription.Exchange,
+				subscription.Code,
+				subscription.Tf,
+				subscription.From,
+				subscription.SkipHistory,
+				subscription.SplitAdjust,
+				subscription.InstrumentGroup,
+				subscription.Format,
+			)
+		case AllTradesOpcode:
+			guid, _ = c.AllTradesSubscribe(
+				subscriber.ID,
+				subscription.Exchange,
+				subscription.Code,
+				subscription.Depth,
+				subscription.Format,
+			)
+		case OrderBookOpcode:
+			guid, _ = c.OrderBooksSubscribe(
+				subscriber.ID,
+				subscription.Exchange,
+				subscription.Code,
+				subscription.Depth,
+				subscription.Format,
+			)
+		default:
+			continue
+		}
+		c.AddSubscription(subscriber.ID, guid)
+		subscriber.subscriptions[key].Guid = guid
+	}
 }

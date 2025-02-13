@@ -72,8 +72,6 @@ func newTraceProvider(exp *otlptrace.Exporter, serviceName string, traceIdRatioB
 }
 
 func InitTraceProvider(ctx context.Context, config Config, serviceName string) (*sdktrace.TracerProvider, error) {
-	// ctx := context.Background()
-
 	exporter, err := newExporter(ctx, config.Endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("initialize exporter: %w", err)
@@ -87,7 +85,7 @@ func InitTraceProvider(ctx context.Context, config Config, serviceName string) (
 	// // Handle shutdown properly so nothing leaks.
 	// defer func() { _ = tp.Shutdown(ctx) }()
 
-	otel.SetTracerProvider(tp) // !!!!!!!!!!!
+	otel.SetTracerProvider(tp)
 
 	return tp, nil
 }

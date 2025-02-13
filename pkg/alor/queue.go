@@ -17,6 +17,15 @@ type Queue struct {
 	mu       sync.Mutex
 }
 
+func NewQueue() *Queue {
+	return &Queue{
+		Elements: make([]Event, 0),
+		Size:     0,
+		Len:      0,
+		mu:       sync.Mutex{},
+	}
+}
+
 func (q *Queue) Enqueue(elem Event) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()

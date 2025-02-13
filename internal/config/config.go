@@ -2,8 +2,8 @@ package config
 
 import (
 	"github.com/MarlyasDad/rd-hub-go/internal/infra/jaeger"
-	"github.com/MarlyasDad/rd-hub-go/internal/logger/zap"
 	"github.com/MarlyasDad/rd-hub-go/internal/transport/http"
+	"github.com/MarlyasDad/rd-hub-go/pkg/logger"
 	"time"
 
 	"github.com/MarlyasDad/rd-hub-go/internal/infra/telegram"
@@ -19,7 +19,7 @@ type (
 		BrokerDevCircuit      bool      `envconfig:"broker_dev_circuit" default:"true"`
 		OtelGrpcEndpoint      string    `envconfig:"otel_grpc_endpoint"`
 		OtelRatioBased        float64   `envconfig:"otel_ratio_based" default:"0.0"`
-		LogLevel              int64     `envconfig:"log_level" default:"-1"`
+		DebugMode             bool      `envconfig:"debug_mode" default:"false"`
 		TelegramBotToken      string    `envconfig:"telegram_bot_token"`
 	}
 
@@ -27,7 +27,7 @@ type (
 		Server   http.Config
 		Broker   alor.Config
 		Tracer   jaeger.Config
-		Logger   zaplogger.Config
+		Logger   logger.Config
 		Telegram telegram.Config
 		// repository db_repo.Config
 	}
@@ -48,8 +48,8 @@ func NewConfig(f EnvVars) Config {
 			Endpoint:          f.OtelGrpcEndpoint,
 			TraceIDRatioBased: f.OtelRatioBased,
 		},
-		Logger: zaplogger.Config{
-			Level: f.LogLevel,
+		Logger: logger.Config{
+			DebugMode: f.DebugMode,
 		},
 		Telegram: telegram.Config{
 			BotToken: f.TelegramBotToken,

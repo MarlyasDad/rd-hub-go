@@ -2,56 +2,65 @@ package app
 
 import (
 	"context"
-	"fmt"
 	appconfig "github.com/MarlyasDad/rd-hub-go/internal/config"
-	"github.com/MarlyasDad/rd-hub-go/pkg/scheduler"
-	"go.uber.org/zap"
-	"go.uber.org/zap/exp/zapslog"
-	"log"
-	"os"
-
 	tgBot "github.com/MarlyasDad/rd-hub-go/internal/infra/telegram"
 	httpTransport "github.com/MarlyasDad/rd-hub-go/internal/transport/http"
 	"github.com/MarlyasDad/rd-hub-go/pkg/alor"
+	"github.com/MarlyasDad/rd-hub-go/pkg/logger"
+	"github.com/MarlyasDad/rd-hub-go/pkg/scheduler"
+	"go.uber.org/zap"
+	"log"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
+	"time"
 )
 
 type (
 	App struct {
-		ctx        context.Context
-		wg         *sync.WaitGroup
-		config     appconfig.Config
-		scheduler  *scheduler.Scheduler
-		broker     *alor.Client
-		tgBot      tgBot.TgClient
-		httpServer httpTransport.Server
-		zapLogger  *zap.Logger
+		ctx          context.Context
+		wg           *sync.WaitGroup
+		config       appconfig.Config
+		scheduler    *scheduler.Scheduler
+		brokerClient *alor.Client
+		tgBot        tgBot.TgClient
+		httpServer   httpTransport.Server
+		zapLogger    *zap.Logger
 	}
 )
 
 func NewApp(ctx context.Context, wg *sync.WaitGroup, config appconfig.Config) (*App, error) {
-	zapL := zap.Must(zap.NewProduction())
-	logger := slog.New(zapslog.NewHandler(zapL.Core(), nil))
-	slog.SetDefault(logger)
+	slog.Info("Hi! I'm Right Decisions Hub! I'm starting...")
+
+	// Init a zap logger and add it as slog default logger
+	zapL := logger.SetupZapLogger(config.Logger.DebugMode)
+	logger.SetSlogDefaultFromZap(zapL)
+	slog.Info("Logger setup successful")
+
+	//slog.Warn("APP started")
+	//slog.Info("This is an info message")
+	//
+	//err := errors.New("failure")
+	//slog.Error("slog", slog.Any("error", err), slog.Int("pid", os.Getpid()))
 
 	// create a scheduler
 	s, err := scheduler.NewScheduler()
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(s)
+	slog.Info("Scheduler setup successful", slog.Any("conn", s))
 
 	// create a broker connection
 	brokerClient := alor.New(config.Broker)
+	slog.Info("Broker setup successful")
 
 	// Telegram bot
-	bot, err := tgBot.New(ctx, config.Telegram)
-	if err != nil {
-		log.Println(err)
-		os.Exit(1)
-	}
+	//bot, err := tgBot.New(ctx, config.Telegram)
+	//if err != nil {
+	//	log.Println(err)
+	//	os.Exit(1)
+	//}
 
 	// bot.AddHandler("start", tgBot.NewStartAdapter(startService.New(ctx, repo)))
 
@@ -86,43 +95,60 @@ func NewApp(ctx context.Context, wg *sync.WaitGroup, config appconfig.Config) (*
 	// Получаем количество необработанных сообщений в очереди
 	httpServer.Mux.HandleFunc("GET /api/v1/stream/queue-status/", func(w http.ResponseWriter, r *http.Request) {})
 
-	// Messages
-	// Отправить сообщение всем активным клиентам
-
-	// тестовый подписчик
-	testSubscriber := alor.NewSyncSubscriber(alor.M1Timeframe, nil, nil) // name?
-	// добавляем подписчика в клиент
-	brokerClient.Websocket.AddSubscriber(testSubscriber)
-
 	// Merge all components into app
 	return &App{
-		ctx:        ctx,
-		wg:         wg,
-		config:     config,
-		scheduler:  s,
-		broker:     brokerClient,
-		httpServer: httpServer,
-		zapLogger:  zapL,
-		tgBot:      bot,
+		ctx:          ctx,
+		wg:           wg,
+		config:       config,
+		scheduler:    s,
+		brokerClient: brokerClient,
+		httpServer:   httpServer,
+		zapLogger:    zapL,
+		// tgBot:        bot,
 	}, nil
 }
 
 func (a *App) Start() error {
-	slog.Info("Hi! I'm Right Decisions Hub! I'm starting...")
-
 	// Подключаемся к брокеру
-	a.broker.Start(a.ctx)
+	err := a.brokerClient.Connect(a.ctx, true)
+	if err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
 	// Начинаем принимать команды от http
 	a.httpServer.Start()
 	// Начинаем принимать команды от telegram
-	err := a.tgBot.Start(a.ctx)
-	if err != nil {
-		return err
-	}
+	// err := a.tgBot.Start(a.ctx)
+	//if err != nil {
+	//	return err
+	//}
 	// Начинаем выполнять задания по расписанию
 	a.scheduler.Start()
 
 	slog.Info("The RD-Hub started correctly")
+
+	// notifier = bot
+	// тестовый подписчик
+	testSubscriber := alor.NewSubscriber(
+		[]alor.Subscription{
+			{
+				Exchange: alor.MOEXExchange,
+				Code:     "SBER",
+				Board:    "TQBR",
+				Tf:       alor.M1Timeframe,
+				Opcode:   alor.BarsOpcode,
+				Format:   alor.SlimResponseFormat,
+				From:     int(time.Now().Add(time.Hour * -24).Unix()),
+			},
+		},
+		nil,
+		a.brokerClient,
+	)
+	// добавляем подписчика в клиент
+	a.brokerClient.Websocket.AddSubscriber(testSubscriber)
+
+	// Messages
+	// Отправить сообщение всем активным клиентам
 
 	return nil
 }
@@ -136,13 +162,11 @@ func (a *App) Stop() error {
 		log.Fatal("Error when stopping scheduler", err)
 	}
 	// Прекращаем получать команды от telegram
-	a.tgBot.Stop()
+	// a.tgBot.Stop()
 	// Прекращаем получать команды от http
 	a.httpServer.Stop()
 	// Отключаемся от брокера
-	a.broker.Stop()
-	// Выключаем трейсер
-	// a.traceProvider.Shutdown(a.ctx)
+	a.brokerClient.Stop()
 
 	slog.Info("The RD-Hub completed correctly")
 

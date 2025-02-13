@@ -23,7 +23,8 @@ func main() {
 
 	application, err := app.NewApp(ctx, &wg, conf)
 	if err != nil {
-		slog.Error("Failed to create app", "err", err)
+		// slog.Error("Failed to create app", "err", err)
+		log.Println("Failed to create app", "err", err)
 		os.Exit(1)
 	}
 

@@ -11,29 +11,34 @@ import (
 type Notifier interface {
 	Info(message string)
 	Warn(message string)
+	// SendMessage(clientId string, messageLevel INFO..., text string)
 }
 
 type Source interface {
-	Subscribe(exchange Exchange, code string) // Возвращает guid
-	Unsubscribe(guid string)
+	BarsSubscribe(subscriberID uuid.UUID, exchange Exchange, code string, tf Timeframe, from int, skipHistory bool, splitAdjust bool, instrumentGroup string, format ResponseFormat) (string, error)
+	OrderBooksSubscribe(subscriberID uuid.UUID, exchange Exchange, code string, depth int, format ResponseFormat) (string, error)
+	AllTradesSubscribe(subscriberID uuid.UUID, exchange Exchange, code string, depth int, format ResponseFormat) (string, error)
+	Unsubscribe(subscriberID uuid.UUID, guid string) error
+	// IsSubscriptionActive(guid string) bool
 }
 
-func NewSyncSubscriber(tf Timeframe, source Source, notifier Notifier) SyncSubscriber {
+func NewSubscriber(subscriptions []Subscription, notifier Notifier, dataSource Source) *Subscriber {
 	subscriberID := uuid.New()
-	return SyncSubscriber{
-		ID:        subscriberID,
-		timeframe: tf,
-		source:    source,   // Где подписаться на данные
-		notifier:  notifier, // Куда отправлять события
+	return &Subscriber{
+		ID:            subscriberID,
+		subscriptions: subscriptions,
+		notifier:      notifier,   // Куда отправлять оповещения
+		source:        dataSource, // Где заказывать данные
 	}
 }
 
-type SyncSubscriber struct {
+type Subscriber struct {
 	ID               uuid.UUID
-	timeframe        Timeframe
+	ClientID         uuid.UUID
+	subscriptions    []Subscription
 	notifier         Notifier // Чтобы отправлять уведомления
 	source           Source   // Чтобы делать заявки
-	subscriptions    map[string]bool
+	queue            *Queue
 	barsHandler      func() error     // Чтобы обрабатывать бары
 	orderBookHandler func() error     // Чтобы обрабатывать стаканы
 	orderHandler     func() error     // Чтобы обрабатывать обезличенные сделки
@@ -44,14 +49,18 @@ type SyncSubscriber struct {
 	marketProfile    bool
 	delta            bool
 	ready            bool
-	// orderBook        OrderBook        // orderBook
+	done             bool
 }
 
-func (s SyncSubscriber) GetID() uuid.UUID {
+func (s Subscriber) GetID() uuid.UUID {
 	return s.ID
 }
 
-func (s SyncSubscriber) HandleEvent(event Event) error {
+func (s Subscriber) IsDone() bool {
+	return s.done
+}
+
+func (s Subscriber) HandleEventSync(event Event) error {
 	if !s.ready {
 		// проверить все подписки
 		// проверить все индикаторы
@@ -72,30 +81,45 @@ func (s SyncSubscriber) HandleEvent(event Event) error {
 	}
 }
 
-func (s SyncSubscriber) AddInitHandler() error {
+func (s Subscriber) HandleEventAsync(event Event) error {
+	// кто-то должен разбирать очередь и пушить в канал
+	// канал должен обрабатываться в селекте
+	return s.queue.Enqueue(event)
+}
+
+func (s Subscriber) AddInitHandler() error {
 	return nil
 }
 
-func (s SyncSubscriber) Init() error {
+func (s Subscriber) Init() error {
+	for _, subscription := range s.subscriptions {
+		if subscription.Opcode == BarsOpcode {
+			_, _ = s.source.BarsSubscribe(s.ID, subscription.Exchange, subscription.Code, subscription.Tf, subscription.From, false, false, "", SlimResponseFormat)
+		}
+	}
 	return nil
 }
 
-func (s SyncSubscriber) AddCandleHandler() error {
+func (s Subscriber) DeInit() error {
 	return nil
 }
 
-func (s SyncSubscriber) NewBar(eventData json.RawMessage) error {
+func (s Subscriber) AddCandleHandler() error {
+	return nil
+}
+
+func (s Subscriber) NewBar(eventData json.RawMessage) error {
 	if s.barsHandler != nil {
 		return s.barsHandler()
 	}
 	return nil
 }
 
-func (s SyncSubscriber) AddOrderBookHandler() error {
+func (s Subscriber) AddOrderBookHandler() error {
 	return nil
 }
 
-func (s SyncSubscriber) NewOrderBook(eventData json.RawMessage) error {
+func (s Subscriber) NewOrderBook(eventData json.RawMessage) error {
 	var orderBookData OrderBookSlimData
 	err := json.Unmarshal(eventData, &orderBookData)
 	if err != nil {
@@ -114,11 +138,11 @@ func (s SyncSubscriber) NewOrderBook(eventData json.RawMessage) error {
 	return nil
 }
 
-func (s SyncSubscriber) AddAllTradesHandler() error {
+func (s Subscriber) AddAllTradesHandler() error {
 	return nil
 }
 
-func (s SyncSubscriber) NewAllTrades(eventData json.RawMessage) error {
+func (s Subscriber) NewAllTrades(eventData json.RawMessage) error {
 	var orderData AllTradesSlimData
 	err := json.Unmarshal(eventData, &orderData)
 	if err != nil {
@@ -144,7 +168,7 @@ func (s SyncSubscriber) NewAllTrades(eventData json.RawMessage) error {
 	return nil
 }
 
-func (s SyncSubscriber) CreateBar(eventTime time.Time) error {
+func (s Subscriber) CreateBar(eventTime time.Time) error {
 	// Создаём новую свечу, когда старая завершена
 	// Считаем время текущей свечи по tf
 	// Двигаем слайс со свечками
@@ -153,6 +177,27 @@ func (s SyncSubscriber) CreateBar(eventTime time.Time) error {
 	return nil
 }
 
-func (s SyncSubscriber) GetLastBar(eventTime time.Time) (*Bar, error) {
+func (s Subscriber) GetLastBar(eventTime time.Time) (*Bar, error) {
 	return &Bar{}, nil
 }
+
+//func (s Subscriber) Run(ctx context.Context) error {
+//
+//	for {
+//		select {
+//		case candle := <-s.candleCh:
+//			_ = s.candleHandler(candle)
+//		case orderBook := <-s.orderBookCh:
+//			_ = s.orderBookHandler(orderBook)
+//		case order := <-s.orderCh:
+//			_ = s.orderHandler(order)
+//		case <-time.After(time.Microsecond * 100):
+//			// check candle for end
+//			// финалим свечи по таймфрейму
+//		case <-ctx.Done():
+//			return nil
+//		}
+//	}
+//
+//	return nil
+//}

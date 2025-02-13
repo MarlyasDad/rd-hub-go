@@ -45,7 +45,7 @@ type RefreshResponse struct {
 }
 
 func (a *Authorization) Refresh() error {
-	a.client.Timeout = time.Duration(2 * time.Second)
+	a.client.Timeout = 2 * time.Second
 
 	url := fmt.Sprintf("%s/refresh?token=%s", a.Host, a.Token.Refresh)
 
@@ -58,7 +58,6 @@ func (a *Authorization) Refresh() error {
 	// Submit the request
 	res, err := a.client.Do(req)
 	if err != nil {
-		log.Println(err)
 		return err
 	}
 
@@ -67,7 +66,6 @@ func (a *Authorization) Refresh() error {
 	}()
 
 	if res.StatusCode == http.StatusForbidden {
-		log.Println("Forbidden!")
 		return errors.New("broker answered forbidden")
 	}
 
@@ -77,7 +75,6 @@ func (a *Authorization) Refresh() error {
 
 	err = json.Unmarshal(body, &r)
 	if err != nil {
-		log.Println(err)
 		return err
 	}
 
@@ -85,13 +82,36 @@ func (a *Authorization) Refresh() error {
 
 	tokenInfo, err := a.ParseTokenInfo()
 	if err != nil {
-		log.Println(err)
 		return err
 	}
 
 	a.Token.Info = tokenInfo
 
 	return nil
+}
+
+func extractClaims(tokenStr string) (jwt.MapClaims, bool) {
+	log.Println(tokenStr)
+
+	hmacSecretString := "30461f17-d85c-4b04-877d-d915235f0763"
+	hmacSecret := []byte(hmacSecretString)
+	// token, err := jwt.Parse(tokenStr, nil, jwt.WithoutClaimsValidation())
+	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+		// check token signing method etc
+		return hmacSecret, nil
+	}, jwt.WithoutClaimsValidation())
+	if err != nil {
+		log.Println(err)
+		return nil, false
+	}
+	log.Println(token.Valid)
+	// if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+	if claims, ok := token.Claims.(jwt.MapClaims); ok {
+		return claims, true
+	} else {
+		log.Printf("Invalid JWT Token")
+		return nil, false
+	}
 }
 
 func (a *Authorization) ParseTokenInfo() (TokenInfo, error) {
@@ -101,7 +121,8 @@ func (a *Authorization) ParseTokenInfo() (TokenInfo, error) {
 	)
 
 	// Headers map[alg:ES256 typ:JWT] without kid
-	_, _, err := jwt.NewParser().ParseUnverified(a.Token.Acccess, claims)
+	_, _, err := jwt.NewParser().ParseUnverified(a.Token.Acccess, &claims)
+	// _, err := jwt.ParseWithClaims(a.Token.Acccess, claims, nil, jwt.WithoutClaimsValidation())
 	if err != nil {
 
 		if errors.Is(err, jwt.ErrSignatureInvalid) {
@@ -113,9 +134,11 @@ func (a *Authorization) ParseTokenInfo() (TokenInfo, error) {
 		return TokenInfo{}, err
 	}
 
-	// for key, val := range claims {
-	// 	fmt.Printf("Key: %v, value: %v\n", key, val)
-	// }
+	// claims, ok := extractClaims(a.Token.Acccess)
+
+	for key, val := range claims {
+		fmt.Printf("Key: %v, value: %v\n", key, val)
+	}
 
 	ent, ok := claims["ent"].(string)
 	if !ok {
