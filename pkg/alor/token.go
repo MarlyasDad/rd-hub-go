@@ -2,18 +2,21 @@ package alor
 
 import "time"
 
-func NewToken() Token {
-	return Token{}
+func NewToken(refreshToken string, refreshExpiration time.Time) Token {
+	return Token{
+		Refresh:           refreshToken,
+		RefreshExpiration: refreshExpiration,
+	}
 }
 
 type Token struct {
-	Acccess           string
-	Info              TokenInfo
+	Access            string
+	Data              TokenData
 	Refresh           string
 	RefreshExpiration time.Time
 }
 
-type TokenInfo struct {
+type TokenData struct {
 	Ent        string    `json:"ent"`        // value: client
 	ClientId   int64     `json:"clientid"`   // value: 115177
 	Portfolios []string  `json:"portfolios"` // value: 750054G D38572 G14708
@@ -28,15 +31,31 @@ type TokenInfo struct {
 	Iss        string    `json:"iss"`        // (Issuer): Издатель value: Alor.Identity
 }
 
-func (t Token) IsExpired() bool {
+func (t *Token) GetAccessToken() (string, error) {
+	// check expiration
+
+	return t.Access, nil
+}
+
+func (t *Token) IsExpired() bool {
 	return t.RefreshExpiration.Before(time.Now())
 }
 
-func (t Token) HoursToExpiration() int {
+func (t *Token) HoursToExpiration() int {
 	dur := time.Since(t.RefreshExpiration)
 
 	return int(dur.Hours())
 }
 
-func (t Token) ChangeRefresh(refresh string, expiration time.Time) {
+func (t *Token) SetAccessToken(newAccessToken string) {
+	t.Access = newAccessToken
+}
+
+func (t *Token) SetRefreshToken(newRefreshToken string, expiration time.Time) {
+	t.Refresh = newRefreshToken
+	t.RefreshExpiration = expiration
+}
+
+func (t *Token) SetData(tokenData TokenData) {
+	t.Data = tokenData
 }

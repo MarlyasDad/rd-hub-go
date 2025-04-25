@@ -2,187 +2,309 @@ package alor
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
-	"log"
+	"sync"
 	"time"
 )
 
-type Notifier interface {
-	Info(message string)
-	Warn(message string)
-	// SendMessage(clientId string, messageLevel INFO..., text string)
-}
-
-type Source interface {
-	BarsSubscribe(subscriberID uuid.UUID, exchange Exchange, code string, tf Timeframe, from int, skipHistory bool, splitAdjust bool, instrumentGroup string, format ResponseFormat) (string, error)
-	OrderBooksSubscribe(subscriberID uuid.UUID, exchange Exchange, code string, depth int, format ResponseFormat) (string, error)
-	AllTradesSubscribe(subscriberID uuid.UUID, exchange Exchange, code string, depth int, format ResponseFormat) (string, error)
-	Unsubscribe(subscriberID uuid.UUID, guid string) error
-	// IsSubscriptionActive(guid string) bool
-}
-
-func NewSubscriber(subscriptions []Subscription, notifier Notifier, dataSource Source) *Subscriber {
-	subscriberID := uuid.New()
-	return &Subscriber{
-		ID:            subscriberID,
-		subscriptions: subscriptions,
-		notifier:      notifier,   // Куда отправлять оповещения
-		source:        dataSource, // Где заказывать данные
-	}
+type CustomHandler interface {
+	Init() error
+	DeInit() error
+	SetHistory(history *BarQueue)
+	NewBar(data BarsSlimData) error
+	NewAllTrades(data AllTradesSlimData) error
+	NewOrderBook(data OrderBookSlimData) error
 }
 
 type Subscriber struct {
-	ID               uuid.UUID
-	ClientID         uuid.UUID
-	subscriptions    []Subscription
-	notifier         Notifier // Чтобы отправлять уведомления
-	source           Source   // Чтобы делать заявки
-	queue            *Queue
-	barsHandler      func() error     // Чтобы обрабатывать бары
-	orderBookHandler func() error     // Чтобы обрабатывать стаканы
-	orderHandler     func() error     // Чтобы обрабатывать обезличенные сделки
-	bars             map[string][]Bar // bar
-	indicators       []string         // indicator
-	autoBarMake      bool
-	depthOfMarket    bool
-	marketProfile    bool
-	delta            bool
-	ready            bool
-	done             bool
+	ID            uuid.UUID                `json:"id"`
+	Description   string                   `json:"description"`
+	CreatedAt     time.Time                `json:"created_at"`
+	Async         bool                     `json:"async"`
+	Exchange      Exchange                 `json:"exchange"`
+	Code          string                   `json:"code"`
+	Board         string                   `json:"board"`
+	Timeframe     Timeframe                `json:"timeframe"`
+	Subscriptions map[Opcode]*Subscription `json:"subscriptions"`
+	CustomHandler CustomHandler            `json:"-"`
+	Queue         *ChainQueue              `json:"-"`
+	BarsProcessor *BarsProcessor           `json:"-"`
+	Ready         bool                     `json:"-"`
+	Done          bool                     `json:"done"`
+	wg            sync.WaitGroup
 }
 
-func (s Subscriber) GetID() uuid.UUID {
+func NewSubscriber(description string, exchange Exchange, code string, board string, timeframe Timeframe, opts ...SubscriberOption) *Subscriber {
+	s := &Subscriber{
+		ID:            uuid.New(),
+		Description:   description,
+		CreatedAt:     time.Now().UTC(),
+		Async:         false,
+		Exchange:      exchange,
+		Code:          code,
+		Board:         board,
+		Timeframe:     timeframe,
+		Queue:         NewChainQueue(10000),
+		BarsProcessor: NewBarsProcessor(timeframe),
+		Subscriptions: make(map[Opcode]*Subscription),
+		Ready:         false,
+		Done:          false,
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	return s
+}
+
+// Options
+
+type SubscriberOption func(subscriber *Subscriber)
+
+func WithDeltaData() SubscriberOption {
+	return func(s *Subscriber) {
+		s.BarsProcessor.detailing.delta = true
+		s.BarsProcessor.detailing.disableBars = true
+	}
+}
+
+func WithMarketProfileData() SubscriberOption {
+	return func(s *Subscriber) {
+		s.BarsProcessor.detailing.marketProfile = true
+		s.BarsProcessor.detailing.disableBars = true
+	}
+}
+
+func WithOrderFlowData() SubscriberOption {
+	return func(s *Subscriber) {
+		s.BarsProcessor.detailing.orderFlow = true
+	}
+}
+
+func WithAsyncHandle() SubscriberOption {
+	return func(s *Subscriber) {
+		s.Async = true
+	}
+}
+
+func WithBarsSubscription(from int64, skipHistory, splitAdjust bool) SubscriberOption {
+	// from := int(time.Now().Add(time.Hour*-24).Unix()))
+	return func(s *Subscriber) {
+		s.Subscriptions[BarsOpcode] = &Subscription{
+			Exchange:        s.Exchange,
+			Code:            s.Code,
+			InstrumentGroup: s.Board,
+			Timeframe:       s.Timeframe,
+			Opcode:          BarsOpcode,
+			SkipHistory:     skipHistory,
+			SplitAdjust:     splitAdjust,
+			Format:          SlimResponseFormat,
+			From:            from,
+		}
+	}
+}
+
+func WithAllTradesSubscription(depth int, includeVirtualTrades bool) SubscriberOption {
+	return func(s *Subscriber) {
+		s.Subscriptions[AllTradesOpcode] = &Subscription{
+			Exchange:             s.Exchange,
+			Code:                 s.Code,
+			InstrumentGroup:      s.Board,
+			Timeframe:            s.Timeframe,
+			Opcode:               AllTradesOpcode,
+			Depth:                depth, // Если указать, то перед актуальными данными придут данные о последних N сделках.
+			IncludeVirtualTrades: includeVirtualTrades,
+			Format:               SlimResponseFormat,
+		}
+	}
+}
+
+func WithOrderBookSubscription(depth int) SubscriberOption {
+	return func(s *Subscriber) {
+		s.Subscriptions[OrderBookOpcode] = &Subscription{
+			Exchange:        s.Exchange,
+			Code:            s.Code,
+			InstrumentGroup: s.Board,
+			Timeframe:       s.Timeframe,
+			Opcode:          OrderBookOpcode,
+			Depth:           depth,
+			Format:          SlimResponseFormat,
+		}
+	}
+}
+
+func WithCustomHandler(handler CustomHandler) SubscriberOption {
+	return func(s *Subscriber) {
+		s.CustomHandler = handler
+		s.CustomHandler.SetHistory(s.BarsProcessor.bars)
+	}
+}
+
+// Setters
+
+//func (s Subscriber) SetSubscriptionGuid(opcode Opcode, guid string) {
+//	_, ok := s.Subscriptions[opcode]
+//	if !ok {
+//		return
+//	}
+//	if entry, ok := s.Subscriptions[opcode]; ok {
+//		entry.Guid = guid
+//		s.Subscriptions[opcode] = entry
+//	}
+//}
+
+func (s *Subscriber) SetID(id uuid.UUID) {
+	s.ID = id
+}
+
+func (s *Subscriber) SetReady() {
+	s.Ready = true
+}
+
+func (s *Subscriber) SetDone() {
+	s.Done = true
+}
+
+func (s *Subscriber) SetWait() {
+	s.wg.Add(1)
+}
+
+func (s *Subscriber) ReleaseWait() {
+	s.wg.Done()
+}
+
+// Getters
+
+func (s *Subscriber) GetID() uuid.UUID {
 	return s.ID
 }
 
-func (s Subscriber) IsDone() bool {
-	return s.done
+func (s *Subscriber) IsDone() bool {
+	return s.Done
 }
 
-func (s Subscriber) HandleEventSync(event Event) error {
-	if !s.ready {
-		// проверить все подписки
-		// проверить все индикаторы
+// GetBarsCloak Получаем BarsCloak
+func (s *Subscriber) GetBarsCloak() *BarQueue {
+	return s.BarsProcessor.bars
+}
 
-		// При обработке подписок ws сообщать всем подписчикам, что подписка активна -> map[guid]true
+// Handlers
+
+func (s *Subscriber) HandleEvent(event *ChainEvent) error {
+	if s.Done {
+		return nil
 	}
+
+	s.wg.Wait()
+
+	// Если не готовы обрабатывать, пишем в очередь и выходим
+	if !s.Ready {
+		_ = s.Queue.Enqueue(event)
+		return nil
+	}
+
+	if s.Async {
+		return s.handleEventAsync(event)
+	} else {
+		return s.handleEventSync(event)
+	}
+}
+
+func (s *Subscriber) HandleHistoryEvent(event *ChainEvent) error {
+	if s.Done {
+		return nil
+	}
+
+	if s.Async {
+		return s.handleEventAsync(event)
+	} else {
+		return s.handleEventSync(event)
+	}
+}
+
+func (s *Subscriber) HandleHistoryAlltrades(data AllTradesSlimData) error {
+	if s.Done {
+		return nil
+	}
+
+	if s.Async {
+		return s.BarsProcessor.NewAllTrades(data)
+	} else {
+		return s.BarsProcessor.NewAllTrades(data)
+	}
+}
+
+func (s *Subscriber) handleEventSync(event *ChainEvent) error {
+	// defer fmt.Println("Opcode: ", event.Opcode)
 
 	switch event.Opcode {
 	case BarsOpcode:
-		return s.NewBar(event.Data)
+		var barsData BarsSlimData
+		err := json.Unmarshal(event.Data, &barsData)
+		if err != nil {
+			return err
+		}
+
+		err = s.BarsProcessor.NewBar(barsData)
+		if err != nil {
+			return err
+		}
+
+		return s.CustomHandler.NewBar(barsData)
 	case AllTradesOpcode:
-		return s.NewAllTrades(event.Data)
+		var allTradesData AllTradesSlimData
+		err := json.Unmarshal(event.Data, &allTradesData)
+		if err != nil {
+			return err
+		}
+
+		err = s.BarsProcessor.NewAllTrades(allTradesData)
+		if err != nil {
+			if errors.Is(err, ErrNewBarFound) {
+				lastFinalBar, _ := s.BarsProcessor.bars.GetLastFinalizedBar()
+				newBarData := BarsSlimData{
+					Time:   lastFinalBar.Timestamp,
+					Open:   lastFinalBar.Open,
+					High:   lastFinalBar.High,
+					Low:    lastFinalBar.Low,
+					Close:  lastFinalBar.Close,
+					Volume: lastFinalBar.Volume,
+				}
+				return s.CustomHandler.NewBar(newBarData)
+			}
+			return err
+		}
+
+		return s.CustomHandler.NewAllTrades(allTradesData)
 	case OrderBookOpcode:
-		return s.NewOrderBook(event.Data)
-	default:
-		fmt.Println("no content")
-		return nil
-	}
-}
-
-func (s Subscriber) HandleEventAsync(event Event) error {
-	// кто-то должен разбирать очередь и пушить в канал
-	// канал должен обрабатываться в селекте
-	return s.queue.Enqueue(event)
-}
-
-func (s Subscriber) AddInitHandler() error {
-	return nil
-}
-
-func (s Subscriber) Init() error {
-	for _, subscription := range s.subscriptions {
-		if subscription.Opcode == BarsOpcode {
-			_, _ = s.source.BarsSubscribe(s.ID, subscription.Exchange, subscription.Code, subscription.Tf, subscription.From, false, false, "", SlimResponseFormat)
+		var orderBookData OrderBookSlimData
+		err := json.Unmarshal(event.Data, &orderBookData)
+		if err != nil {
+			return err
 		}
-	}
-	return nil
-}
 
-func (s Subscriber) DeInit() error {
-	return nil
-}
-
-func (s Subscriber) AddCandleHandler() error {
-	return nil
-}
-
-func (s Subscriber) NewBar(eventData json.RawMessage) error {
-	if s.barsHandler != nil {
-		return s.barsHandler()
-	}
-	return nil
-}
-
-func (s Subscriber) AddOrderBookHandler() error {
-	return nil
-}
-
-func (s Subscriber) NewOrderBook(eventData json.RawMessage) error {
-	var orderBookData OrderBookSlimData
-	err := json.Unmarshal(eventData, &orderBookData)
-	if err != nil {
-		return err
+		return s.BarsProcessor.NewOrderBook(orderBookData)
 	}
 
-	log.Println(orderBookData)
-
-	if s.autoBarMake && s.depthOfMarket {
-		// добавить информацию к текущей свечке
-	}
-
-	if s.orderBookHandler != nil {
-		return s.orderBookHandler()
-	}
+	fmt.Println("no content")
 	return nil
 }
 
-func (s Subscriber) AddAllTradesHandler() error {
-	return nil
-}
-
-func (s Subscriber) NewAllTrades(eventData json.RawMessage) error {
-	var orderData AllTradesSlimData
-	err := json.Unmarshal(eventData, &orderData)
-	if err != nil {
-		return err
-	}
-
-	log.Println(orderData)
-
-	// from order flow - обезличенные сделки
-	if s.autoBarMake {
-		// Добавить основную информацию к свечке
-		if s.marketProfile {
-			// добавить информацию к текущей свечке
-		}
-		if s.delta {
-			// добавить информацию к текущей свечке
-		}
-	}
-
-	if s.orderHandler != nil {
-		return s.orderHandler()
-	}
-	return nil
-}
-
-func (s Subscriber) CreateBar(eventTime time.Time) error {
-	// Создаём новую свечу, когда старая завершена
-	// Считаем время текущей свечи по tf
-	// Двигаем слайс со свечками
-	// Удаляем первый элемент если ёмкость превышена
-	// Ёмкость берём как самый большой период индикаторов
-	return nil
-}
-
-func (s Subscriber) GetLastBar(eventTime time.Time) (*Bar, error) {
-	return &Bar{}, nil
+func (s *Subscriber) handleEventAsync(event *ChainEvent) error {
+	return s.Queue.Enqueue(event)
 }
 
 //func (s Subscriber) Run(ctx context.Context) error {
 //
+//  for {
+//    select {
+//    case <-a.context.Done():
+//        return
+//    default:
+//        return
 //	for {
 //		select {
 //		case candle := <-s.candleCh:

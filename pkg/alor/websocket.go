@@ -6,14 +6,17 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"log"
+	"strings"
 	"sync"
+	"time"
 )
 
 func NewWebsocket(url string) *Websocket {
 	return &Websocket{
-		url:         url,
-		subscribers: make(map[SubscriberID]*Subscriber),
-		queue:       NewQueue(),
+		url:           url,
+		subscribers:   make(map[SubscriberID]*Subscriber),
+		subscriptions: make(map[GUID]SubscriptionState),
+		queue:         NewChainQueue(10000),
 	}
 }
 
@@ -30,7 +33,7 @@ type SubscriptionState struct {
 type Websocket struct {
 	url           string
 	conn          *websocket.Conn
-	queue         *Queue
+	queue         *ChainQueue
 	done          chan interface{}
 	subscribers   map[SubscriberID]*Subscriber
 	subscriptions map[GUID]SubscriptionState
@@ -39,7 +42,7 @@ type Websocket struct {
 
 func (ws *Websocket) runWebsocketLoop(connection *websocket.Conn) {
 	defer close(ws.done)
-	defer log.Println("loop closed")
+	defer log.Println("websocket loop closed")
 	for {
 		_, msg, err := connection.ReadMessage()
 		if err != nil {
@@ -66,9 +69,12 @@ func (ws *Websocket) Connect() error {
 		return err
 	}
 
+	conn.EnableWriteCompression(true)
+
 	ws.conn = conn
 
 	go ws.runWebsocketLoop(ws.conn)
+	go ws.runQueueLoop()
 
 	return nil
 }
@@ -78,8 +84,12 @@ func (ws *Websocket) IsConnected() bool {
 		return false
 	}
 
-	_, ok := <-ws.done
-	return ok
+	select {
+	case <-ws.done:
+		return false
+	default:
+		return true
+	}
 }
 
 func (ws *Websocket) Disconnect() error {
@@ -121,12 +131,12 @@ type WsResponse struct {
 	Message     string          `json:"message"`
 	Data        json.RawMessage `json:"data"`
 	HttpCode    int             `json:"httpCode"`
-	RequestGuid string          `json:"requestGuid"`
-	Guid        string          `json:"guid"`
+	RequestGuid GUID            `json:"requestGuid"`
+	Guid        GUID            `json:"guid"`
 }
 
 func (ws *Websocket) HandleResponse(msg []byte) error {
-	log.Printf("Received: %s\n", msg)
+	// log.Printf("Received: %s\n", msg)
 
 	var response WsResponse
 	err := json.Unmarshal(msg, &response)
@@ -139,11 +149,21 @@ func (ws *Websocket) HandleResponse(msg []byte) error {
 	// Если отбивка, запускаем метод обработки отбивки
 	// if event == подтверждение подписки
 	// То ...
+	if response.RequestGuid != "" {
+		// обрабатываем статус подписки
+		guidParts := strings.Split(string(response.RequestGuid), "-")
+		_ = Opcode(guidParts[2]) // from guid
+	}
 
-	opcode := BarsOpcode // from guid
+	// Если guid пустой, печатаем warning
+	if response.Guid == "" {
+		return nil
+	}
 
-	// QueueItem? QueueEvent?
-	event := Event{
+	guidParts := strings.Split(string(response.Guid), "-")
+	opcode := Opcode(guidParts[2]) // from guid
+
+	event := &ChainEvent{
 		Opcode: opcode,
 		Guid:   response.Guid,
 		Data:   response.Data,
@@ -153,6 +173,8 @@ func (ws *Websocket) HandleResponse(msg []byte) error {
 	if err != nil {
 		return err
 	}
+	
+	// log.Println("length enqueue", ws.queue.GetLength())
 
 	return nil
 }
@@ -192,30 +214,28 @@ func (ws *Websocket) RemoveSubscription(subscriberID uuid.UUID, guid string) err
 	return nil
 }
 
-func (ws *Websocket) RemoveAllSubscriberSubscriptions(subscriberID uuid.UUID) error {
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
-
-	for guid, _ := range ws.subscriptions {
-		delete(ws.subscriptions[guid].Items, SubscriberID(subscriberID))
-
-		//for i, v := range ws.subscriptions[key] {
-		//	if v == subscriberID {
-		//		ws.subscriptions[key] = append(ws.subscriptions[key][:i], ws.subscriptions[key][i+1:]...)
-		//	}
-		//}
-	}
-
-	return nil
-}
+//func (ws *Websocket) RemoveAllSubscriberSubscriptions(subscriberID uuid.UUID) error {
+//	ws.mu.Lock()
+//	defer ws.mu.Unlock()
+//
+//	for guid, _ := range ws.subscriptions {
+//		delete(ws.subscriptions[guid].Items, SubscriberID(subscriberID))
+//
+//		//for i, v := range ws.subscriptions[key] {
+//		//	if v == subscriberID {
+//		//		ws.subscriptions[key] = append(ws.subscriptions[key][:i], ws.subscriptions[key][i+1:]...)
+//		//	}
+//		//}
+//	}
+//
+//	return nil
+//}
 
 func (ws *Websocket) AddSubscriber(subscriber *Subscriber) {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
 	ws.subscribers[SubscriberID(subscriber.ID)] = subscriber
-
-	_ = subscriber.Init()
 }
 
 func (ws *Websocket) RemoveSubscriber(subscriberID uuid.UUID) {
@@ -223,6 +243,38 @@ func (ws *Websocket) RemoveSubscriber(subscriberID uuid.UUID) {
 	defer ws.mu.Unlock()
 
 	delete(ws.subscribers, SubscriberID(subscriberID))
+}
 
-	// err := subscriber.DeInit()
+func (ws *Websocket) runQueueLoop() {
+	defer log.Println("queue loop closed")
+	for {
+		select {
+		case <-ws.done:
+			break
+		default:
+			event, err := ws.queue.Dequeue()
+			if err != nil {
+				if errors.Is(err, ErrQueueUnderFlow) {
+					time.Sleep(time.Millisecond * 100)
+					continue
+				}
+
+				log.Println("Error in receive:", err)
+				break
+			}
+
+			log.Println("length dequeue", ws.queue.GetLength())
+
+			// log.Println(event)
+
+			// Проходим по всем подписчикам
+			for subscriber, _ := range ws.subscriptions[event.Guid].Items {
+				if !ws.IsConnected() {
+					return
+				}
+				// Handle event
+				_ = ws.subscribers[subscriber].HandleEvent(event)
+			}
+		}
+	}
 }

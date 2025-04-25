@@ -2,19 +2,17 @@ package app
 
 import (
 	"context"
+	"github.com/MarlyasDad/rd-hub-go/internal/app/http"
 	appconfig "github.com/MarlyasDad/rd-hub-go/internal/config"
 	tgBot "github.com/MarlyasDad/rd-hub-go/internal/infra/telegram"
-	httpTransport "github.com/MarlyasDad/rd-hub-go/internal/transport/http"
 	"github.com/MarlyasDad/rd-hub-go/pkg/alor"
 	"github.com/MarlyasDad/rd-hub-go/pkg/logger"
 	"github.com/MarlyasDad/rd-hub-go/pkg/scheduler"
 	"go.uber.org/zap"
 	"log"
 	"log/slog"
-	"net/http"
 	"os"
 	"sync"
-	"time"
 )
 
 type (
@@ -25,7 +23,7 @@ type (
 		scheduler    *scheduler.Scheduler
 		brokerClient *alor.Client
 		tgBot        tgBot.TgClient
-		httpServer   httpTransport.Server
+		httpServer   http.Server
 		zapLogger    *zap.Logger
 	}
 )
@@ -34,25 +32,26 @@ func NewApp(ctx context.Context, wg *sync.WaitGroup, config appconfig.Config) (*
 	slog.Info("Hi! I'm Right Decisions Hub! I'm starting...")
 
 	// Init a zap logger and add it as slog default logger
-	zapL := logger.SetupZapLogger(config.Logger.DebugMode)
-	logger.SetSlogDefaultFromZap(zapL)
+	zapLog := logger.SetupZapLogger(config.Logger.DebugMode)
+	logger.SetSlogDefaultFromZap(zapLog)
 	slog.Info("Logger setup successful")
 
 	//slog.Warn("APP started")
 	//slog.Info("This is an info message")
-	//
+
 	//err := errors.New("failure")
 	//slog.Error("slog", slog.Any("error", err), slog.Int("pid", os.Getpid()))
 
 	// create a scheduler
-	s, err := scheduler.NewScheduler()
+	sch, err := scheduler.NewScheduler()
 	if err != nil {
 		log.Fatal(err)
 	}
-	slog.Info("Scheduler setup successful", slog.Any("conn", s))
+	slog.Info("Scheduler setup successful", slog.Any("conn", sch))
 
 	// create a broker connection
-	brokerClient := alor.New(config.Broker)
+	alorClient := alor.New(config.Broker)
+	// brokerClient := broker.New(alorClient)
 	slog.Info("Broker setup successful")
 
 	// Telegram bot
@@ -65,45 +64,18 @@ func NewApp(ctx context.Context, wg *sync.WaitGroup, config appconfig.Config) (*
 	// bot.AddHandler("start", tgBot.NewStartAdapter(startService.New(ctx, repo)))
 
 	// Http server
-	httpServer := httpTransport.New(config.Server)
-	httpServer.Mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "./web/dist/index.html")
-	})
-	// Static files
-	httpFileServer := http.FileServer(http.Dir("./web/dist/assets"))
-	httpServer.Mux.Handle("GET /assets/", http.StripPrefix("/assets/", httpFileServer))
-
-	// Portfolios
-	httpServer.Mux.HandleFunc("GET /api/v1/portfolios/", func(w http.ResponseWriter, r *http.Request) {})
-	httpServer.Mux.HandleFunc("GET /api/v1/portfolios/{portfolio}/", func(w http.ResponseWriter, r *http.Request) {})
-
-	// Depth of market
-	httpServer.Mux.HandleFunc("GET /api/v1/order-book/{security}/", func(w http.ResponseWriter, r *http.Request) {})
-
-	// Subscribers
-	// Создаём подписчика и подписываем его на необходимые инструменты
-	// Все инструкции передаём через тело запроса в формате JSON
-	httpServer.Mux.HandleFunc("POST /api/v1/subscribers/subscribe/", func(w http.ResponseWriter, r *http.Request) {})
-	// Удаляем подписчика по его ID
-	httpServer.Mux.HandleFunc("DELETE /api/v1/subscribers/unsubscribe/{subscriber_id}/", func(w http.ResponseWriter, r *http.Request) {})
-	// Получаем список активных подписчиков
-	httpServer.Mux.HandleFunc("GET /api/v1/subscribers/", func(w http.ResponseWriter, r *http.Request) {})
-	// Получаем информацию об активном подписчике
-	httpServer.Mux.HandleFunc("GET /api/v1/subscribers/{subscriber_id}/", func(w http.ResponseWriter, r *http.Request) {})
-
-	// Websocket client
-	// Получаем количество необработанных сообщений в очереди
-	httpServer.Mux.HandleFunc("GET /api/v1/stream/queue-status/", func(w http.ResponseWriter, r *http.Request) {})
+	httpServer := http.New(config.Server)
+	http.RegisterHandlers(httpServer.Mux, alorClient)
 
 	// Merge all components into app
 	return &App{
 		ctx:          ctx,
 		wg:           wg,
 		config:       config,
-		scheduler:    s,
-		brokerClient: brokerClient,
+		scheduler:    sch,
+		brokerClient: alorClient,
 		httpServer:   httpServer,
-		zapLogger:    zapL,
+		zapLogger:    zapLog,
 		// tgBot:        bot,
 	}, nil
 }
@@ -117,39 +89,43 @@ func (a *App) Start() error {
 	}
 	// Начинаем принимать команды от http
 	a.httpServer.Start()
+	// Начинаем выполнять задания по расписанию
+	a.scheduler.Start()
 	// Начинаем принимать команды от telegram
 	// err := a.tgBot.Start(a.ctx)
 	//if err != nil {
 	//	return err
 	//}
-	// Начинаем выполнять задания по расписанию
-	a.scheduler.Start()
+
+	// тестовый подписчик
+	//testHandler := barsToFileCommand.New("UWGN.txt")
+	//testSubscriber := alor.NewSubscriber(
+	//	"Test UWGN subscriber, timeframe M5, sync, HeavyBarsDetailing",
+	//	alor.MOEXExchange,
+	//	"UWGN",
+	//	"TQBR",
+	//	alor.M5TF,
+	//	alor.WithDeltaData(),
+	//	alor.WithMarketProfileData(),
+	//	alor.WithOrderFlowData(),
+	//	alor.WithAllTradesSubscription(0, false),
+	//	alor.WithOrderBookSubscription(10),
+	//	alor.WithCustomHandler(testHandler),
+	//)
+	//
+	//err = a.brokerClient.AddSubscriber(testSubscriber)
+	//// result, err := a.brokerClient.TestSubscriber(testSubscriber)
+	//if err != nil {
+	//	return err
+	//}
+
+	// Принудительно заменить commands и notifier в customHandlers на заглушки
+	// Получить историю через АПИ
+	// WithAllTradesHistory(from, to) сначала получить за прошлые сессии, потом за текущую, всё прогнать через subscriber
+	// WithBarsHistory(from, to) ---//---
+	// Когда вся история скормлена выдать результат
 
 	slog.Info("The RD-Hub started correctly")
-
-	// notifier = bot
-	// тестовый подписчик
-	testSubscriber := alor.NewSubscriber(
-		[]alor.Subscription{
-			{
-				Exchange: alor.MOEXExchange,
-				Code:     "SBER",
-				Board:    "TQBR",
-				Tf:       alor.M1Timeframe,
-				Opcode:   alor.BarsOpcode,
-				Format:   alor.SlimResponseFormat,
-				From:     int(time.Now().Add(time.Hour * -24).Unix()),
-			},
-		},
-		nil,
-		a.brokerClient,
-	)
-	// добавляем подписчика в клиент
-	a.brokerClient.Websocket.AddSubscriber(testSubscriber)
-
-	// Messages
-	// Отправить сообщение всем активным клиентам
-
 	return nil
 }
 

@@ -8,32 +8,19 @@ services:
       - "4318:4318"
       - "4317:4317"
 
-  rd-gate-server:
-    container_name: rd-gate-server
-    image: rd-gate-server-image
+  rd-hube-server:
+    container_name: rd-hub-server
+    image: rd-hub-server-image
     build:
       context: ./../../
-      dockerfile: ./build/dev/rd_gate/Dockerfile
+      dockerfile: ./build/dev/rd_hub/Dockerfile
     environment:
-      - KAFKA_HOSTS=kafka-0:29092
-      - KAFKA_USERNAME=username
-      - KAFKA_PASSWORD=password
-      - TOPIC_CONSUMER=mp.entity_fetch
-      - TOPIC_CONSUMER_GROUP=mp.entity_fetch_group
-      - TOPIC_PRODUCER=mp.entity_import
-      - TOPIC_IMAGE_REMOVER=mp.image_remover
-      - TOPIC_LOGGER=mp.entity_log
-      - SERVICE_ID=mp.feed_loader_0
-      - MAX_INPUT_FILE_SIZE_MB=50
       - DB_HOST=pg-0
       - DB_NAME=sales_module_dev
       - DB_PASSWORD=postgres_password123$
       - DB_USERNAME=postgres_user
-      - SENTRY_DSN=http://localhost
-      - ESTORE_URL=https://estorage.apps.k8s.dev.domoy.ru
-      - ESTORE_KEY=JDE83HDS94HR98DSIUFH928DKJ98YFDH
     depends_on:
       kafka-init-topics:
         condition: service_completed_successfully
     networks:
-      - rd-gate-network
+      - rd-hub-network

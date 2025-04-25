@@ -1,8 +1,8 @@
 package config
 
 import (
+	"github.com/MarlyasDad/rd-hub-go/internal/app/http"
 	"github.com/MarlyasDad/rd-hub-go/internal/infra/jaeger"
-	"github.com/MarlyasDad/rd-hub-go/internal/transport/http"
 	"github.com/MarlyasDad/rd-hub-go/pkg/logger"
 	"time"
 
