@@ -23,6 +23,7 @@ type (
 		SubscriberID uuid.UUID `json:"subscriber_id"`
 		HeikenAshi   bool      `json:"heiken_ashi"`
 	}
+
 	GetSubscriberBarsResponse struct{}
 )
 

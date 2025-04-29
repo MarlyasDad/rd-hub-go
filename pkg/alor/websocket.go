@@ -14,7 +14,6 @@ import (
 func NewWebsocket(url string) *Websocket {
 	return &Websocket{
 		url:           url,
-		subscribers:   make(map[SubscriberID]*Subscriber),
 		subscriptions: make(map[GUID]SubscriptionState),
 		queue:         NewChainQueue(10000),
 	}
@@ -27,7 +26,7 @@ type (
 
 type SubscriptionState struct {
 	Active bool
-	Items  map[SubscriberID]bool
+	Items  map[SubscriberID]*Subscriber
 }
 
 type Websocket struct {
@@ -35,8 +34,8 @@ type Websocket struct {
 	conn          *websocket.Conn
 	queue         *ChainQueue
 	done          chan interface{}
-	subscribers   map[SubscriberID]*Subscriber
 	subscriptions map[GUID]SubscriptionState
+	metrics       map[string]interface{}
 	mu            sync.Mutex
 }
 
@@ -173,13 +172,13 @@ func (ws *Websocket) HandleResponse(msg []byte) error {
 	if err != nil {
 		return err
 	}
-	
+
 	// log.Println("length enqueue", ws.queue.GetLength())
 
 	return nil
 }
 
-func (ws *Websocket) AddSubscription(subscriberID uuid.UUID, guid string) {
+func (ws *Websocket) AddSubscription(subscriber *Subscriber, guid string) {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
@@ -187,62 +186,32 @@ func (ws *Websocket) AddSubscription(subscriberID uuid.UUID, guid string) {
 	if !ok {
 		ws.subscriptions[GUID(guid)] = SubscriptionState{
 			Active: false,
-			Items:  make(map[SubscriberID]bool),
+			Items:  make(map[SubscriberID]*Subscriber),
 		}
 	}
 
-	ws.subscriptions[GUID(guid)].Items[SubscriberID(subscriberID)] = true
+	ws.subscriptions[GUID(guid)].Items[SubscriberID(subscriber.ID)] = subscriber
 }
 
 func (ws *Websocket) RemoveSubscription(subscriberID uuid.UUID, guid string) error {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
+	// Получаем саму подписку
 	_, ok := ws.subscriptions[GUID(guid)]
 	if !ok {
 		return errors.New("the subscription is not exists")
 	}
 
+	// Удаляем подписчика из подписки
 	delete(ws.subscriptions[GUID(guid)].Items, SubscriberID(subscriberID))
 
-	//for i, v := range ws.subscriptions[GUID(guid)] {
-	//	if v == subscriberID {
-	//		ws.subscriptions[guid] = append(ws.subscriptions[guid][:i], ws.subscriptions[guid][i+1:]...)
-	//	}
-	//}
+	// Удаляем подписку если она пустая
+	if len(ws.subscriptions[GUID(guid)].Items) == 0 {
+		delete(ws.subscriptions, GUID(guid))
+	}
 
 	return nil
-}
-
-//func (ws *Websocket) RemoveAllSubscriberSubscriptions(subscriberID uuid.UUID) error {
-//	ws.mu.Lock()
-//	defer ws.mu.Unlock()
-//
-//	for guid, _ := range ws.subscriptions {
-//		delete(ws.subscriptions[guid].Items, SubscriberID(subscriberID))
-//
-//		//for i, v := range ws.subscriptions[key] {
-//		//	if v == subscriberID {
-//		//		ws.subscriptions[key] = append(ws.subscriptions[key][:i], ws.subscriptions[key][i+1:]...)
-//		//	}
-//		//}
-//	}
-//
-//	return nil
-//}
-
-func (ws *Websocket) AddSubscriber(subscriber *Subscriber) {
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
-
-	ws.subscribers[SubscriberID(subscriber.ID)] = subscriber
-}
-
-func (ws *Websocket) RemoveSubscriber(subscriberID uuid.UUID) {
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
-
-	delete(ws.subscribers, SubscriberID(subscriberID))
 }
 
 func (ws *Websocket) runQueueLoop() {
@@ -267,13 +236,53 @@ func (ws *Websocket) runQueueLoop() {
 
 			// log.Println(event)
 
-			// Проходим по всем подписчикам
-			for subscriber, _ := range ws.subscriptions[event.Guid].Items {
-				if !ws.IsConnected() {
-					return
+			if !ws.subscriptions[event.Guid].Active {
+				item := ws.subscriptions[event.Guid]
+				item.Active = true
+				ws.subscriptions[event.Guid] = item
+			}
+
+			// Последовательное выполнение может занимать много времени - тогда заменить на асинхронные обработчики
+			for _, subscriber := range ws.subscriptions[event.Guid].Items {
+				// Блокируем добавление/удаление любых подписчиков пока не пройдёт handle
+				// Никто не может поменять subscriptions во время вычисления
+				// Добавление или удаление из-за этого может занять продолжительное время
+				ws.mu.Lock()
+
+				if subscriber == nil || subscriber.Done {
+					// Разблокируем удаление подписчиков
+					ws.mu.Unlock()
+					continue
 				}
-				// Handle event
-				_ = ws.subscribers[subscriber].HandleEvent(event)
+
+				// TODO: Выполнять все вместе параллельно или каждый с асинхронным обработчиком?
+				// Синхронное выполнение с задержкой хотя-бы одного воркера может тормозить остальные
+				// Отличная идея - выполнять сабскриберы в горутинах. Тогда отставать будет самый нагруженный
+				// А легковесные будут пролетать со свистом
+
+				// !Проблема синхронизации между воркерами - один имеет актуальное состояние, а другой нет
+				// Как решить - непонятно. Если только сравнивать длину очередей. Если с маленькой погрешностью не отличаются
+				// Идея! Если нужно сделать зависимые сабскриберы - делать для них асинхронную оболочку и внутри обрабатывать события синхронно
+
+				// !Проблема отставания от текущей ситуации (решается распараллеливанием) - проверять очередь на количество необработанных элементов
+				// Всё, что работает в реалтайме не должно превышать определённый порог загруженности очереди
+				// Причём, как общей очереди вебсокета, так и в частной очереди сабскрибера
+				// Если очередь переполняется и не разгружается, то отключаем сабскрибера SetDone()
+				// Так мы отсекаем самых медленных подписчиков
+				// TODO: Нужно сделать проверку очереди вебсокета. При достижении 50тысяч, отключать вебсокет и алертить!
+				// Или отключать всех сабскриберов
+				// Если очередь больше дельты, не отправлять команды брокеру.
+				// Работают только самые шустрые, медленные отключаются
+
+				// В каждом сабскрибере делать свой контекст с отменой от родительского. Отменять горутину когда сабскрибер будет удаляться.
+
+				if err := subscriber.HandleEvent(event); err != nil {
+					subscriber.SetDone()
+					log.Println(subscriber.ID, "Error in handle:", err)
+				}
+
+				// Разблокируем удаление подписчиков
+				ws.mu.Unlock()
 			}
 		}
 	}

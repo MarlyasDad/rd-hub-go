@@ -11,4 +11,5 @@ type brokerClient interface {
 	AddSubscriber(subscriber *alor.Subscriber) error
 	RemoveSubscriber(subscriberID uuid.UUID) error
 	GetAllTrades(params alor.GetAllTradesV2Params) ([]alor.AllTradesSlimData, error)
+	GetSubscriber(subscriberID uuid.UUID) (*alor.Subscriber, error)
 }

@@ -50,3 +50,7 @@ compose-rs: ## remove previously and start new local env
 .PHONY: .add-migration
 .add-migration:
 	cd migrations && ../bin/goose create $(MIGRATION_NAME) sql
+
+.PHONY: .activate-notebooks
+.activate-notebooks:
+	source $(CURDIR)/notebooks/venv/bin/activate

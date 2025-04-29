@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	httpmiddlewares "github.com/MarlyasDad/rd-hub-go/internal/app/http/middlewares"
 )
@@ -20,8 +21,9 @@ func New(config Config) Server {
 	httpHandler := httpmiddlewares.RemoveTrailingMiddleware(httpmiddlewares.LoggingMiddleware(httpmiddlewares.CorsMiddleware(mux)))
 
 	return Server{
-		Mux:    mux,
-		server: &http.Server{Addr: fmt.Sprintf("%s:%d", config.Host, config.Port), Handler: httpHandler},
+		Mux: mux,
+		server: &http.Server{Addr: fmt.Sprintf("%s:%d", config.Host, config.Port), Handler: httpHandler, ReadTimeout: 30 * time.Second,
+			WriteTimeout: 30 * time.Second},
 	}
 }
 

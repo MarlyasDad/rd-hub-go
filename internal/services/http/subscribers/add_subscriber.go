@@ -49,7 +49,7 @@ func (s Service) AddSubscriber() (uuid.UUID, error) { // FromAlltrades
 		Descending:   false,
 		JsonResponse: true,
 		Offset:       0,
-		Take:         5000,
+		Take:         10000,
 		// FromID:       &fromID,
 	}
 
@@ -76,7 +76,9 @@ func (s Service) AddSubscriber() (uuid.UUID, error) { // FromAlltrades
 			}
 		}
 
-		params.Offset += 5000
+		time.Sleep(100 * time.Millisecond)
+
+		params.Offset += 10000
 	}
 	log.Println("get data for ", testSubscriber.ID, " finished")
 

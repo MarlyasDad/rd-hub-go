@@ -95,10 +95,15 @@ type OrderBookRequest struct {
 	Guid      string         `json:"guid"`                // Не более 50 символов. Уникальный идентификатор сообщений создаваемой подписки. Все входящие сообщения, соответствующие этой подписке, будут иметь такое значение поля guid
 }
 
-func (c *Client) OrderBooksSubscribe(subscriberID uuid.UUID, sub *Subscription) error {
+func (c *Client) OrderBooksSubscribe(subscriber *Subscriber) error {
 	token, err := c.Token.GetAccessToken()
 	if err != nil {
 		return err
+	}
+
+	sub, ok := subscriber.Subscriptions[OrderBookOpcode]
+	if !ok {
+		return fmt.Errorf("no subscription for OrderBook")
 	}
 
 	guid := fmt.Sprintf("%s-%s-%s-%d-%s", sub.Exchange, sub.Code, sub.Opcode, sub.Depth, sub.Format)
@@ -143,7 +148,7 @@ func (c *Client) OrderBooksSubscribe(subscriberID uuid.UUID, sub *Subscription) 
 		return err
 	}
 
-	c.Websocket.AddSubscription(subscriberID, request.Guid)
+	c.Websocket.AddSubscription(subscriber, request.Guid)
 	return nil
 }
 
@@ -202,10 +207,15 @@ type AllTradesRequest struct {
 	Token                string         `json:"token"`                // Access Токен для авторизации запроса
 }
 
-func (c *Client) AllTradesSubscribe(subscriberID uuid.UUID, sub *Subscription) error {
+func (c *Client) AllTradesSubscribe(subscriber *Subscriber) error {
 	token, err := c.Token.GetAccessToken()
 	if err != nil {
 		return err
+	}
+
+	sub, ok := subscriber.Subscriptions[AllTradesOpcode]
+	if !ok {
+		return fmt.Errorf("no subscription for Alltrades")
 	}
 
 	guid := fmt.Sprintf("%s-%s-%s-%s", sub.Exchange, sub.Code, sub.Opcode, sub.Format)
@@ -250,7 +260,7 @@ func (c *Client) AllTradesSubscribe(subscriberID uuid.UUID, sub *Subscription) e
 		return err
 	}
 
-	c.Websocket.AddSubscription(subscriberID, request.Guid)
+	c.Websocket.AddSubscription(subscriber, request.Guid)
 	return nil
 }
 
@@ -309,10 +319,15 @@ type BarsRequest struct {
 	Token           string         `json:"token"`               // Access Токен для авторизации запроса
 }
 
-func (c *Client) BarsSubscribe(subscriberID uuid.UUID, sub *Subscription) error {
+func (c *Client) BarsSubscribe(subscriber *Subscriber) error {
 	token, err := c.Token.GetAccessToken()
 	if err != nil {
 		return err
+	}
+
+	sub, ok := subscriber.Subscriptions[BarsOpcode]
+	if !ok {
+		return fmt.Errorf("no subscription for Bars")
 	}
 
 	guid := fmt.Sprintf("%s-%s-%d-%s-%s", sub.Exchange, sub.Code, sub.Timeframe, sub.Opcode, sub.Format)
@@ -357,7 +372,7 @@ func (c *Client) BarsSubscribe(subscriberID uuid.UUID, sub *Subscription) error 
 		return err
 	}
 
-	c.Websocket.AddSubscription(subscriberID, request.Guid)
+	c.Websocket.AddSubscription(subscriber, request.Guid)
 	return nil
 }
 

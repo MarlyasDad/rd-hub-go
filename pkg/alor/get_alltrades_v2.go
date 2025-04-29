@@ -1,11 +1,13 @@
 package alor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 )
 
 type GetAllTradesV2Params struct {
@@ -32,11 +34,16 @@ func (c *Client) GetAllTrades(params GetAllTradesV2Params) ([]AllTradesSlimData,
 	method := "GET"
 	url := fmt.Sprintf("%s/md/v2/Securities/%s/%s/alltrades", c.Hosts.Data, params.Exchange, params.Symbol)
 
-	req, err := http.NewRequest(method, url, nil)
+	ctx, cncl := context.WithTimeout(context.Background(), time.Second*30)
+	defer cncl()
+
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
 		fmt.Println(err)
 		return data, err
 	}
+
+	req.Close = true
 
 	// query parameters
 	q := req.URL.Query()
@@ -102,7 +109,9 @@ func (c *Client) GetAllTrades(params GetAllTradesV2Params) ([]AllTradesSlimData,
 	req.Header.Add("Accept", "application/json")
 	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", accessToken))
 
-	res, err := c.Client.Do(req)
+	client := http.Client{}
+
+	res, err := client.Do(req)
 	if err != nil {
 		return data, err
 	}

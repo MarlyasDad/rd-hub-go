@@ -8,6 +8,15 @@ import (
 )
 
 func RegisterRoutes(mux *http.ServeMux, brokerClient *alor.Client) {
+	getSubscriberPattern := "GET /api/subscriber"
+	mux.Handle(
+		getSubscriberPattern,
+		NewSubscriberHandler(
+			httpSubscribersCommand.New(brokerClient),
+			getSubscriberPattern,
+		),
+	)
+
 	getSubscribersPattern := "GET /api/subscriber/all"
 	mux.Handle(
 		getSubscribersPattern,
@@ -32,6 +41,15 @@ func RegisterRoutes(mux *http.ServeMux, brokerClient *alor.Client) {
 		NewSubscriberAddHandler(
 			httpSubscribersCommand.New(brokerClient),
 			addSubscriberPattern,
+		),
+	)
+
+	removeSubscriberPattern := "DELETE /api/subscriber/{subscriber_id}"
+	mux.Handle(
+		removeSubscriberPattern,
+		NewSubscriberRemoveHandler(
+			httpSubscribersCommand.New(brokerClient),
+			removeSubscriberPattern,
 		),
 	)
 }

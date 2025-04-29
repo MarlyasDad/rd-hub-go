@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
+	"log"
 	"sync"
 	"time"
 )
@@ -253,11 +254,18 @@ func (s *Subscriber) handleEventSync(event *ChainEvent) error {
 			return err
 		}
 
-		return s.CustomHandler.NewBar(barsData)
+		if s.CustomHandler != nil {
+			if err := s.CustomHandler.NewBar(barsData); err != nil {
+				return err
+			}
+		}
+
+		return nil
 	case AllTradesOpcode:
 		var allTradesData AllTradesSlimData
 		err := json.Unmarshal(event.Data, &allTradesData)
 		if err != nil {
+			log.Println("cannot unmarshal Alltrades", string(event.Data))
 			return err
 		}
 
@@ -273,12 +281,24 @@ func (s *Subscriber) handleEventSync(event *ChainEvent) error {
 					Close:  lastFinalBar.Close,
 					Volume: lastFinalBar.Volume,
 				}
-				return s.CustomHandler.NewBar(newBarData)
+
+				if s.CustomHandler != nil {
+					if err := s.CustomHandler.NewBar(newBarData); err != nil {
+						return err
+					}
+				}
+				return nil
 			}
 			return err
 		}
 
-		return s.CustomHandler.NewAllTrades(allTradesData)
+		if s.CustomHandler != nil {
+			if err := s.CustomHandler.NewAllTrades(allTradesData); err != nil {
+				return err
+			}
+		}
+
+		return nil
 	case OrderBookOpcode:
 		var orderBookData OrderBookSlimData
 		err := json.Unmarshal(event.Data, &orderBookData)
@@ -286,7 +306,17 @@ func (s *Subscriber) handleEventSync(event *ChainEvent) error {
 			return err
 		}
 
-		return s.BarsProcessor.NewOrderBook(orderBookData)
+		if err := s.BarsProcessor.NewOrderBook(orderBookData); err != nil {
+			return err
+		}
+
+		if s.CustomHandler != nil {
+			if err := s.CustomHandler.NewOrderBook(orderBookData); err != nil {
+				return err
+			}
+		}
+
+		return nil
 	}
 
 	fmt.Println("no content")

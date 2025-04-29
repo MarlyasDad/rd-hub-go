@@ -21,7 +21,7 @@ func New(ctx context.Context, config Config) (TgClient, error) {
 		return TgClient{}, err
 	}
 
-	updates, err := bot.UpdatesViaLongPolling(nil, telego.WithLongPollingContext(ctx))
+	updates, err := bot.UpdatesViaLongPolling(ctx, nil)
 	if err != nil {
 		return TgClient{}, err
 	}
@@ -45,7 +45,7 @@ func (c *TgClient) Start(ctx context.Context) error {
 
 func (c *TgClient) Stop() {
 	c.Handler.Stop()
-	c.bot.StopLongPolling()
+	_, _ = c.bot.StopPoll(context.Background(), nil)
 }
 
 func (c *TgClient) AddHandler(command string, handler th.Handler) {
