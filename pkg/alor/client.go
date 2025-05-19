@@ -63,7 +63,7 @@ func (c *Client) Connect(ctx context.Context, websocket bool) error {
 	}
 
 	if websocket {
-		err = c.Websocket.Connect()
+		err = c.Websocket.Connect(ctx)
 		if err != nil {
 			return err
 		}
