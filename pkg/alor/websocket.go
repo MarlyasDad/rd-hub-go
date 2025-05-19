@@ -1,8 +1,10 @@
 package alor
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"log"
@@ -39,56 +41,25 @@ type Websocket struct {
 	mu            sync.Mutex
 }
 
-func (ws *Websocket) runWebsocketLoop(connection *websocket.Conn) {
-	defer close(ws.done)
-	defer log.Println("websocket loop closed")
-	for {
-		_, msg, err := connection.ReadMessage()
-		if err != nil {
-			log.Println("Error in receive:", err)
-			return
-		}
-
-		// Обрабатываем входящее сообщение
-		err = ws.HandleResponse(msg)
-		if err != nil {
-			log.Println("Error in handle:", err)
-			return
-		}
-	}
-}
-
-func (ws *Websocket) Connect() error {
-	ws.done = make(chan interface{}) // Channel to indicate that the receiverHandler is done
-
-	// socketUrl := "ws://localhost:8080" + "/socket"
-	conn, _, err := websocket.DefaultDialer.Dial(ws.url, nil)
+func (ws *Websocket) Connect(ctx context.Context) error {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, ws.url, nil)
 	if err != nil {
-		log.Println("Error connecting to Websocket Server:", err)
-		return err
+		return fmt.Errorf("error connecting to Websocket Server: %w", err)
 	}
 
 	conn.EnableWriteCompression(true)
-
 	ws.conn = conn
+	//ws.conn.SetCloseHandler(func(code int, text string) error {
+	//	fmt.Println("Websocket disconnected")
+	//	return nil
+	//})
 
-	go ws.runWebsocketLoop(ws.conn)
-	go ws.runQueueLoop()
+	ws.done = make(chan interface{}) // Channel to indicate that the receiverHandler is done
+	go ws.runWebsocketLoop(ctx)
+	go ws.runWebsocketHealthLoop(ctx)
+	go ws.runQueueLoop(ctx)
 
 	return nil
-}
-
-func (ws *Websocket) IsConnected() bool {
-	if ws.done == nil {
-		return false
-	}
-
-	select {
-	case <-ws.done:
-		return false
-	default:
-		return true
-	}
 }
 
 func (ws *Websocket) Disconnect() error {
@@ -109,6 +80,19 @@ func (ws *Websocket) Disconnect() error {
 	}
 
 	return nil
+}
+
+func (ws *Websocket) IsConnected() bool {
+	if ws.done == nil {
+		return false
+	}
+
+	select {
+	case <-ws.done:
+		return false
+	default:
+		return true
+	}
 }
 
 func (ws *Websocket) SendMessage(msg []byte) error {
@@ -214,28 +198,55 @@ func (ws *Websocket) RemoveSubscription(subscriberID uuid.UUID, guid string) err
 	return nil
 }
 
-func (ws *Websocket) runQueueLoop() {
+func (ws *Websocket) runWebsocketLoop(ctx context.Context) {
+	defer close(ws.done)
+	defer log.Println("websocket loop closed")
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			_, msg, err := ws.conn.ReadMessage()
+			if err != nil {
+				log.Println("Error in receive:", err)
+				return
+			}
+
+			// Обрабатываем входящее сообщение
+			err = ws.HandleResponse(msg)
+			if err != nil {
+				log.Println("Error in handle:", err)
+				return
+			}
+		}
+	}
+}
+
+func (ws *Websocket) runQueueLoop(ctx context.Context) {
 	defer log.Println("queue loop closed")
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-ws.done:
-			break
+			return
 		default:
 			event, err := ws.queue.Dequeue()
 			if err != nil {
 				if errors.Is(err, ErrQueueUnderFlow) {
-					time.Sleep(time.Millisecond * 100)
+					time.Sleep(time.Millisecond * 500)
 					continue
 				}
 
 				log.Println("Error in receive:", err)
-				break
+				return
 			}
 
 			log.Println("length dequeue", ws.queue.GetLength())
 
 			// log.Println(event)
 
+			// Устанавливаем подписку как активную если по ней пришло событие
 			if !ws.subscriptions[event.Guid].Active {
 				item := ws.subscriptions[event.Guid]
 				item.Active = true
@@ -263,6 +274,7 @@ func (ws *Websocket) runQueueLoop() {
 				// !Проблема синхронизации между воркерами - один имеет актуальное состояние, а другой нет
 				// Как решить - непонятно. Если только сравнивать длину очередей. Если с маленькой погрешностью не отличаются
 				// Идея! Если нужно сделать зависимые сабскриберы - делать для них асинхронную оболочку и внутри обрабатывать события синхронно
+				// subscribersGroup - интерфейс как у сабскрибера
 
 				// !Проблема отставания от текущей ситуации (решается распараллеливанием) - проверять очередь на количество необработанных элементов
 				// Всё, что работает в реалтайме не должно превышать определённый порог загруженности очереди
@@ -283,6 +295,23 @@ func (ws *Websocket) runQueueLoop() {
 
 				// Разблокируем удаление подписчиков
 				ws.mu.Unlock()
+			}
+		}
+	}
+}
+
+func (ws *Websocket) runWebsocketHealthLoop(ctx context.Context) {
+	defer log.Println("websocket health loop closed")
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ws.done:
+			time.Sleep(time.Second * 5)
+			log.Println("try to websocket reconnect")
+			err := ws.Connect(ctx)
+			if err != nil {
+				log.Println(err)
 			}
 		}
 	}
