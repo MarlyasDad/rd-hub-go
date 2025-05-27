@@ -84,7 +84,7 @@ func TestDequeueElement(t *testing.T) {
 	deqElement, err := queue.Dequeue()
 
 	require.NoError(t, err)
-	require.Equal(t, GUID("bars_guid"), deqElement.Guid)
+	require.Equal(t, "bars_guid", deqElement.Guid)
 }
 
 func TestEnqueueSomeElements(t *testing.T) {
@@ -107,7 +107,7 @@ func TestEnqueueSomeElements(t *testing.T) {
 		element, err := queue.Dequeue()
 
 		require.NoError(t, err)
-		require.Equal(t, GUID(fmt.Sprintf("bars_guid_%d", i+1)), element.Guid)
+		require.Equal(t, fmt.Sprintf("bars_guid_%d", i+1), element.Guid)
 		require.Equal(t, 1000-i-1, queue.GetLength())
 	}
 }
