@@ -38,7 +38,7 @@ func RegisterRoutes(mux *http.ServeMux, brokerClient *alor.Client) {
 	addSubscriberPattern := "POST /api/subscriber"
 	mux.Handle(
 		addSubscriberPattern,
-		NewSubscriberAddHandler(
+		NewAddSubscriberHandler(
 			httpSubscribersCommand.New(brokerClient),
 			addSubscriberPattern,
 		),
@@ -47,7 +47,7 @@ func RegisterRoutes(mux *http.ServeMux, brokerClient *alor.Client) {
 	removeSubscriberPattern := "DELETE /api/subscriber/{subscriber_id}"
 	mux.Handle(
 		removeSubscriberPattern,
-		NewSubscriberRemoveHandler(
+		NewRemoveSubscriberHandler(
 			httpSubscribersCommand.New(brokerClient),
 			removeSubscriberPattern,
 		),

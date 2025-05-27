@@ -1,6 +1,7 @@
 package subscribers
 
 import (
+	"context"
 	"errors"
 	"github.com/MarlyasDad/rd-hub-go/pkg/alor"
 	"github.com/google/uuid"
@@ -8,32 +9,54 @@ import (
 	"time"
 )
 
-func (s Service) AddSubscriber() (uuid.UUID, error) { // FromAlltrades
+type AddSubscriberParams struct {
+	Description       string
+	Exchange          string
+	Code              string
+	Board             string
+	Timeframe         int64
+	WithDelta         bool
+	WithMarketProfile bool
+	WithOrderFlow     bool
+}
+
+func (s Service) AddSubscriber(ctx context.Context, params AddSubscriberParams) (uuid.UUID, error) { // FromAlltrades
 	var options []alor.SubscriberOption
 
 	// testHandler := barsToFileCommand.New("UWGN.txt")
 
-	options = append(options, alor.WithDeltaData())
-	options = append(options, alor.WithMarketProfileData())
-	options = append(options, alor.WithOrderFlowData())
+	if params.WithDelta {
+		options = append(options, alor.WithDeltaData())
+	}
+
+	if params.WithMarketProfile {
+		options = append(options, alor.WithMarketProfileData())
+	}
+
+	if params.WithOrderFlow {
+		options = append(options, alor.WithOrderFlowData())
+	}
+
 	options = append(options, alor.WithAllTradesSubscription(0, false))
 	options = append(options, alor.WithOrderBookSubscription(10))
 	// options = append(options, alor.WithCustomHandler(testHandler))
 
 	// Подписчик создаётся с ready = false. Все новые события начинают накапливаться в очереди
-	testSubscriber := alor.NewSubscriber(
-		"Test UWGN subscriber, timeframe M5, sync",
-		alor.MOEXExchange,
-		"UWGN",
-		"TQBR",
-		alor.M5TF,
+	testSubscriber, err := alor.NewSubscriber(
+		params.Description,
+		params.Exchange,
+		params.Code,
+		params.Board,
+		params.Timeframe,
 		options...,
 	)
+	if err != nil {
+		return uuid.Nil, err
+	}
 
 	// Начинаем получать события
-	err := s.brokerClient.AddSubscriber(testSubscriber)
-	if err != nil {
-		return testSubscriber.ID, err
+	if err := s.brokerClient.AddSubscriber(testSubscriber); err != nil {
+		return uuid.Nil, err
 	}
 
 	// GET данные прошлых сессий
@@ -41,7 +64,7 @@ func (s Service) AddSubscriber() (uuid.UUID, error) { // FromAlltrades
 
 	// GET данные текущей сессии
 	from := time.Now().AddDate(0, 0, -1).Unix()
-	params := alor.GetAllTradesV2Params{
+	historyParams := alor.GetAllTradesV2Params{
 		Exchange:     alor.MOEXExchange,
 		Symbol:       "UWGN",
 		Board:        "TQBR",
@@ -55,8 +78,8 @@ func (s Service) AddSubscriber() (uuid.UUID, error) { // FromAlltrades
 
 	// Получаем данные от брокера <====
 	for {
-		log.Println("get data for ", testSubscriber.ID, " offset ", params.Offset)
-		events, err := s.brokerClient.GetAllTrades(params)
+		log.Println("get data for ", testSubscriber.ID, " offset ", historyParams.Offset)
+		events, err := s.brokerClient.GetAllTrades(historyParams)
 		if err != nil {
 			return testSubscriber.ID, err
 		}
@@ -65,7 +88,7 @@ func (s Service) AddSubscriber() (uuid.UUID, error) { // FromAlltrades
 			break
 		}
 
-		log.Println(len(events), "got events from", testSubscriber.ID, " offset ", params.Offset)
+		log.Println(len(events), "got events from", testSubscriber.ID, " offset ", historyParams.Offset)
 
 		// Отправляем все данные в подписчика ====>
 		for _, event := range events {
@@ -78,7 +101,7 @@ func (s Service) AddSubscriber() (uuid.UUID, error) { // FromAlltrades
 
 		time.Sleep(100 * time.Millisecond)
 
-		params.Offset += 10000
+		historyParams.Offset += 10000
 	}
 	log.Println("get data for ", testSubscriber.ID, " finished")
 

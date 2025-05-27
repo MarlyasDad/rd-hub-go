@@ -9,16 +9,16 @@ import (
 )
 
 type (
-	subscriberRemoveCommand interface {
+	removeSubscriberCommand interface {
 		RemoveSubscriber(uuid.UUID) error
 	}
 
-	SubscriberRemoveHandler struct {
+	RemoveSubscriberHandler struct {
 		name                    string
-		subscriberRemoveCommand subscriberRemoveCommand
+		removeSubscriberCommand removeSubscriberCommand
 	}
 
-	subscriberRemoveRequest struct {
+	removeSubscriberRequest struct {
 		ID uuid.UUID `json:"id"`
 	}
 
@@ -34,17 +34,17 @@ type (
 	//}
 )
 
-func NewSubscriberRemoveHandler(command subscriberAddCommand, name string) *SubscriberAddHandler {
-	return &SubscriberAddHandler{
-		name:                 name,
-		subscriberAddCommand: command,
+func NewRemoveSubscriberHandler(command removeSubscriberCommand, name string) *RemoveSubscriberHandler {
+	return &RemoveSubscriberHandler{
+		name:                    name,
+		removeSubscriberCommand: command,
 	}
 }
 
-func (h *SubscriberRemoveHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *RemoveSubscriberHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var (
 		// ctx = r.Context()
-		requestData *subscriberRemoveRequest
+		requestData *removeSubscriberRequest
 		err         error
 	)
 
@@ -59,7 +59,7 @@ func (h *SubscriberRemoveHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	err = h.subscriberRemoveCommand.RemoveSubscriber(requestData.ID)
+	err = h.removeSubscriberCommand.RemoveSubscriber(requestData.ID)
 	if err != nil {
 		responses.GetErrorResponse(w, h.name, err, http.StatusInternalServerError)
 		return
@@ -70,8 +70,8 @@ func (h *SubscriberRemoveHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 	responses.GetSuccessResponse(w)
 }
 
-func (h *SubscriberRemoveHandler) getRequestData(r *http.Request) (requestData *subscriberRemoveRequest, err error) {
-	requestData = &subscriberRemoveRequest{}
+func (h *RemoveSubscriberHandler) getRequestData(r *http.Request) (requestData *removeSubscriberRequest, err error) {
+	requestData = &removeSubscriberRequest{}
 
 	if err = json.NewDecoder(r.Body).Decode(requestData); err != nil {
 		return
@@ -80,6 +80,6 @@ func (h *SubscriberRemoveHandler) getRequestData(r *http.Request) (requestData *
 	return
 }
 
-func (h *SubscriberRemoveHandler) validateRequestData(requestData *subscriberRemoveRequest) error {
+func (h *RemoveSubscriberHandler) validateRequestData(requestData *removeSubscriberRequest) error {
 	return validator.New().Struct(requestData)
 }

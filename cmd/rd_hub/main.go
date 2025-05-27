@@ -19,7 +19,7 @@ func main() {
 	conf := appConfig.NewConfig(envVars)
 
 	wg := sync.WaitGroup{}
-	ctx := app.RunSignalHandler(context.Background(), &wg)
+	ctx := RunSignalHandler(context.Background(), &wg)
 
 	application, err := app.NewApp(ctx, &wg, conf)
 	if err != nil {

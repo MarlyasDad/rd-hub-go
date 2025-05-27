@@ -37,18 +37,23 @@ type Subscriber struct {
 	wg            sync.WaitGroup
 }
 
-func NewSubscriber(description string, exchange Exchange, code string, board string, timeframe Timeframe, opts ...SubscriberOption) *Subscriber {
+func NewSubscriber(description string, exchange string, code string, board string, timeframe int64, opts ...SubscriberOption) (*Subscriber, error) {
+	// validate exchange
+	validExchange := Exchange(exchange)
+	// validate timeframe
+	validTimeframe := Timeframe(timeframe)
+
 	s := &Subscriber{
 		ID:            uuid.New(),
 		Description:   description,
 		CreatedAt:     time.Now().UTC(),
 		Async:         false,
-		Exchange:      exchange,
+		Exchange:      validExchange,
 		Code:          code,
 		Board:         board,
-		Timeframe:     timeframe,
+		Timeframe:     validTimeframe,
 		Queue:         NewChainQueue(10000),
-		BarsProcessor: NewBarsProcessor(timeframe),
+		BarsProcessor: NewBarsProcessor(validTimeframe),
 		Subscriptions: make(map[Opcode]*Subscription),
 		Ready:         false,
 		Done:          false,
@@ -58,7 +63,7 @@ func NewSubscriber(description string, exchange Exchange, code string, board str
 		opt(s)
 	}
 
-	return s
+	return s, nil
 }
 
 // Options

@@ -95,22 +95,21 @@ type OrderBookRequest struct {
 	Guid      string         `json:"guid"`                // Не более 50 символов. Уникальный идентификатор сообщений создаваемой подписки. Все входящие сообщения, соответствующие этой подписке, будут иметь такое значение поля guid
 }
 
-func (c *Client) OrderBooksSubscribe(subscriber *Subscriber) error {
-	token, err := c.Token.GetAccessToken()
-	if err != nil {
-		return err
-	}
+func (ws *Websocket) OrderBooksSubscribe(token string, subscription *Subscription) ([]byte, error) {
+	guid := fmt.Sprintf(
+		"%s-%s-%s-%s-%d-%s",
+		subscription.Exchange,
+		subscription.Code,
+		subscription.InstrumentGroup,
+		subscription.Opcode,
+		subscription.Depth,
+		subscription.Format,
+	)
 
-	sub, ok := subscriber.Subscriptions[OrderBookOpcode]
-	if !ok {
-		return fmt.Errorf("no subscription for OrderBook")
-	}
+	subscription.Guid = guid
 
-	guid := fmt.Sprintf("%s-%s-%s-%d-%s", sub.Exchange, sub.Code, sub.Opcode, sub.Depth, sub.Format)
-	sub.Guid = guid
-
-	if sub.Depth > 50 || sub.Depth == 0 {
-		sub.Depth = 10
+	if subscription.Depth > 50 || subscription.Depth == 0 {
+		subscription.Depth = 10
 	}
 
 	var frequency int
@@ -118,7 +117,7 @@ func (c *Client) OrderBooksSubscribe(subscriber *Subscriber) error {
 	// Simple — 25 миллисекунд
 	// Slim — 10 миллисекунд
 	// Heavy — 500 миллисекунд
-	switch sub.Format {
+	switch subscription.Format {
 	case SimpleResponseFormat:
 		frequency = 25
 	case SlimResponseFormat:
@@ -129,27 +128,16 @@ func (c *Client) OrderBooksSubscribe(subscriber *Subscriber) error {
 
 	request := OrderBookRequest{
 		Token:     token,
-		Code:      sub.Code,
-		Depth:     sub.Depth,
-		Exchange:  sub.Exchange,
-		Format:    sub.Format,
+		Code:      subscription.Code,
+		Depth:     subscription.Depth,
+		Exchange:  subscription.Exchange,
+		Format:    subscription.Format,
 		Frequency: frequency,
-		Opcode:    sub.Opcode,
+		Opcode:    subscription.Opcode,
 		Guid:      guid,
 	}
 
-	requestBytes, err := json.Marshal(request)
-	if err != nil {
-		return err
-	}
-
-	err = c.Websocket.SendMessage(requestBytes)
-	if err != nil {
-		return err
-	}
-
-	c.Websocket.AddSubscription(subscriber, request.Guid)
-	return nil
+	return json.Marshal(request)
 }
 
 type OrderBookSimpleData struct {
@@ -207,22 +195,20 @@ type AllTradesRequest struct {
 	Token                string         `json:"token"`                // Access Токен для авторизации запроса
 }
 
-func (c *Client) AllTradesSubscribe(subscriber *Subscriber) error {
-	token, err := c.Token.GetAccessToken()
-	if err != nil {
-		return err
-	}
+func (ws *Websocket) AllTradesSubscribe(token string, subscription *Subscription) ([]byte, error) {
+	guid := fmt.Sprintf(
+		"%s-%s-%s-%s-%s",
+		subscription.Exchange,
+		subscription.Code,
+		subscription.InstrumentGroup,
+		subscription.Opcode,
+		subscription.Format,
+	)
 
-	sub, ok := subscriber.Subscriptions[AllTradesOpcode]
-	if !ok {
-		return fmt.Errorf("no subscription for Alltrades")
-	}
+	subscription.Guid = guid
 
-	guid := fmt.Sprintf("%s-%s-%s-%s", sub.Exchange, sub.Code, sub.Opcode, sub.Format)
-	sub.Guid = guid
-
-	if sub.Depth > 50 {
-		sub.Depth = 50
+	if subscription.Depth > 50 {
+		subscription.Depth = 50
 	}
 
 	var frequency int
@@ -230,7 +216,7 @@ func (c *Client) AllTradesSubscribe(subscriber *Subscriber) error {
 	// Simple — 25 миллисекунд
 	// Slim — 10 миллисекунд
 	// Heavy — 500 миллисекунд
-	switch sub.Format {
+	switch subscription.Format {
 	case SimpleResponseFormat:
 		frequency = 25
 	case SlimResponseFormat:
@@ -240,28 +226,17 @@ func (c *Client) AllTradesSubscribe(subscriber *Subscriber) error {
 	}
 
 	request := AllTradesRequest{
-		Opcode:    sub.Opcode,
+		Opcode:    subscription.Opcode,
 		Token:     token,
-		Exchange:  sub.Exchange,
+		Exchange:  subscription.Exchange,
 		Guid:      guid,
-		Code:      sub.Code,
-		Depth:     sub.Depth,
-		Format:    sub.Format,
+		Code:      subscription.Code,
+		Depth:     subscription.Depth,
+		Format:    subscription.Format,
 		Frequency: frequency,
 	}
 
-	requestBytes, err := json.Marshal(request)
-	if err != nil {
-		return err
-	}
-
-	err = c.Websocket.SendMessage(requestBytes)
-	if err != nil {
-		return err
-	}
-
-	c.Websocket.AddSubscription(subscriber, request.Guid)
-	return nil
+	return json.Marshal(request)
 }
 
 type AllTradesSimpleData struct {
@@ -319,26 +294,25 @@ type BarsRequest struct {
 	Token           string         `json:"token"`               // Access Токен для авторизации запроса
 }
 
-func (c *Client) BarsSubscribe(subscriber *Subscriber) error {
-	token, err := c.Token.GetAccessToken()
-	if err != nil {
-		return err
-	}
+func (ws *Websocket) BarsSubscribe(token string, subscription *Subscription) ([]byte, error) {
+	guid := fmt.Sprintf(
+		"%s-%s-%s-%d-%s-%s",
+		subscription.Exchange,
+		subscription.Code,
+		subscription.InstrumentGroup,
+		subscription.Timeframe,
+		subscription.Opcode,
+		subscription.Format,
+	)
 
-	sub, ok := subscriber.Subscriptions[BarsOpcode]
-	if !ok {
-		return fmt.Errorf("no subscription for Bars")
-	}
-
-	guid := fmt.Sprintf("%s-%s-%d-%s-%s", sub.Exchange, sub.Code, sub.Timeframe, sub.Opcode, sub.Format)
-	sub.Guid = guid
+	subscription.Guid = guid
 
 	var frequency int
 	// Минимальное значение параметра Frequency зависит от выбранного формата возвращаемого JSON-объекта:
 	// Simple — 25 миллисекунд
 	// Slim — 10 миллисекунд
 	// Heavy — 500 миллисекунд
-	switch sub.Format {
+	switch subscription.Format {
 	case SimpleResponseFormat:
 		frequency = 25
 	case SlimResponseFormat:
@@ -348,32 +322,21 @@ func (c *Client) BarsSubscribe(subscriber *Subscriber) error {
 	}
 
 	request := BarsRequest{
-		Opcode:          sub.Opcode,
-		Code:            sub.Code,
-		Tf:              sub.Timeframe,
-		From:            sub.From,
-		SkipHistory:     sub.SkipHistory,
-		SplitAdjust:     sub.SplitAdjust,
-		Exchange:        sub.Exchange,
-		InstrumentGroup: sub.InstrumentGroup,
-		Format:          sub.Format,
+		Opcode:          subscription.Opcode,
+		Code:            subscription.Code,
+		Tf:              subscription.Timeframe,
+		From:            subscription.From,
+		SkipHistory:     subscription.SkipHistory,
+		SplitAdjust:     subscription.SplitAdjust,
+		Exchange:        subscription.Exchange,
+		InstrumentGroup: subscription.InstrumentGroup,
+		Format:          subscription.Format,
 		Frequency:       frequency,
 		Guid:            guid,
 		Token:           token,
 	}
 
-	requestBytes, err := json.Marshal(request)
-	if err != nil {
-		return err
-	}
-
-	err = c.Websocket.SendMessage(requestBytes)
-	if err != nil {
-		return err
-	}
-
-	c.Websocket.AddSubscription(subscriber, request.Guid)
-	return nil
+	return json.Marshal(request)
 }
 
 type BarsSimpleData struct {
@@ -415,32 +378,7 @@ func (c *Client) Unsubscribe(subscriberID uuid.UUID, guid string) error {
 		return err
 	}
 
-	err = c.Websocket.RemoveSubscription(subscriberID, guid)
-	if err != nil {
-		return err
-	}
-
-	// Выйти если ещё остались подписчики
-	// Поменять на метод вебсокета
-	if len(c.Websocket.subscriptions[GUID(guid)].Items) > 0 {
-		return nil
-	}
-
-	_ = c.Websocket.RemoveSubscription(subscriberID, guid)
-	// delete(c.Websocket.subscriptions, GUID(guid))
-
-	request := UnsubscribeRequest{
-		Opcode: UnsubscribeOpcode,
-		Token:  token,
-		GUID:   guid,
-	}
-
-	requestBytes, err := json.Marshal(request)
-	if err != nil {
-		return err
-	}
-
-	return c.Websocket.SendMessage(requestBytes)
+	return c.Websocket.Unsubscribe(token, subscriberID, guid)
 }
 
 /*

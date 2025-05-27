@@ -32,7 +32,7 @@ type TokenData struct {
 }
 
 func (t *Token) GetAccessToken() (string, error) {
-	// check expiration
+	// TODO: check expiration, LOCK!!!
 
 	return t.Access, nil
 }

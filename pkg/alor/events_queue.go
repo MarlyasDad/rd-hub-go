@@ -7,7 +7,7 @@ import (
 
 type ChainEvent struct {
 	Opcode Opcode
-	Guid   GUID
+	Guid   string
 	Data   json.RawMessage
 	Next   *ChainEvent
 }
