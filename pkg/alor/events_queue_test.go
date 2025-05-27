@@ -95,7 +95,7 @@ func TestEnqueueSomeElements(t *testing.T) {
 	for i := range 1000 {
 		element := &ChainEvent{
 			Opcode: BarsOpcode,
-			Guid:   GUID(fmt.Sprintf("bars_guid_%d", i+1)),
+			Guid:   fmt.Sprintf("bars_guid_%d", i+1),
 		}
 
 		err := queue.Enqueue(element)
@@ -122,7 +122,7 @@ func TestQueueOverFlow(t *testing.T) {
 	for i := range 100 {
 		element := &ChainEvent{
 			Opcode: BarsOpcode,
-			Guid:   GUID(fmt.Sprintf("bars_guid_%d", i+1)),
+			Guid:   fmt.Sprintf("bars_guid_%d", i+1),
 		}
 
 		err := queue.Enqueue(element)

@@ -37,6 +37,7 @@ compose-rs: ## remove previously and start new local env
 
 .PHONY: .build
 .build:
+	go vet ./...
 	go build -o bin/rd_hub ./cmd/rd_hub/
 
 .PHONY: .run
