@@ -10,7 +10,6 @@ import (
 	"log"
 	"strings"
 	"sync"
-	"time"
 )
 
 func NewWebsocket(url string) *Websocket {
@@ -38,6 +37,7 @@ type Websocket struct {
 	conn          *websocket.Conn
 	queue         *ChainQueue
 	done          chan interface{}
+	healthDone    chan interface{}
 	subscribers   map[SubscriberID]*Subscriber
 	subscriptions map[string]SubscriptionState
 	metrics       map[string]interface{}
@@ -47,7 +47,6 @@ type Websocket struct {
 func (ws *Websocket) Connect(ctx context.Context, token string) error {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, ws.url, nil)
 	if err != nil {
-		close(ws.done)
 		return fmt.Errorf("error connecting to Websocket Server: %w", err)
 	}
 
@@ -58,10 +57,12 @@ func (ws *Websocket) Connect(ctx context.Context, token string) error {
 	//	return nil
 	//})
 
-	ws.done = make(chan interface{}) // Channel to indicate that the receiverHandler is done
-	go ws.runWebsocketLoop(ctx)
-	go ws.runQueueLoop(ctx)
+	ws.done = make(chan interface{})
 
+	go ws.runQueueLoop(ctx)
+	go ws.runWebsocketLoop(ctx)
+
+	// Восстанавливаем подписки
 	if err := ws.restoreSubscriptions(token); err != nil {
 		return fmt.Errorf("error restoring subscriptions: %w", err)
 	}
@@ -69,21 +70,21 @@ func (ws *Websocket) Connect(ctx context.Context, token string) error {
 	return nil
 }
 
-func (ws *Websocket) Reconnect(ctx context.Context, token string) error {
-	if err := ws.Disconnect(); err != nil {
-		return err
-	}
-
-	if err := ws.Connect(ctx, token); err != nil {
-		return err
-	}
-
-	return nil
-}
+//func (ws *Websocket) Reconnect(ctx context.Context, token string) error {
+//	if err := ws.Disconnect(); err != nil {
+//		return err
+//	}
+//
+//	if err := ws.Connect(ctx, token); err != nil {
+//		return err
+//	}
+//
+//	return nil
+//}
 
 func (ws *Websocket) Disconnect() error {
 	if ws.IsConnected() {
-		close(ws.done)
+		// close(ws.done)
 
 		err := ws.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		if err != nil {
@@ -153,10 +154,10 @@ func (ws *Websocket) HandleResponse(msg []byte) error {
 	// Если отбивка, запускаем метод обработки отбивки
 	// if event == подтверждение подписки
 	// То ...
+	// TODO: ТУТ ОТБИВКИ
 	if response.RequestGuid != "" {
-		// обрабатываем статус подписки
-		guidParts := strings.Split(string(response.RequestGuid), "-")
-		_ = Opcode(guidParts[2]) // from guid
+		log.Printf("Received: %s\n", msg)
+		return nil
 	}
 
 	// Если guid пустой, печатаем warning
@@ -165,7 +166,7 @@ func (ws *Websocket) HandleResponse(msg []byte) error {
 	}
 
 	guidParts := strings.Split(string(response.Guid), "-")
-	opcode := Opcode(guidParts[2]) // from guid
+	opcode := Opcode(guidParts[3]) // from guid
 
 	event := &ChainEvent{
 		Opcode: opcode,
@@ -181,22 +182,6 @@ func (ws *Websocket) HandleResponse(msg []byte) error {
 	// log.Println("length enqueue", ws.queue.GetLength())
 
 	return nil
-}
-
-func (ws *Websocket) AddSubscription(subscription *Subscription, subscriber *Subscriber) {
-	//ws.mu.Lock()
-	//defer ws.mu.Unlock()
-
-	_, ok := ws.subscriptions[subscription.Guid]
-	if !ok {
-		ws.subscriptions[subscription.Guid] = SubscriptionState{
-			Subscription: subscription,
-			Active:       false,
-			Items:        make(map[SubscriberID]*Subscriber),
-		}
-	}
-
-	ws.subscriptions[subscription.Guid].Items[SubscriberID(subscriber.ID)] = subscriber
 }
 
 func (ws *Websocket) RemoveSubscription(subscriberID uuid.UUID, guid string) error {
@@ -218,110 +203,6 @@ func (ws *Websocket) RemoveSubscription(subscriberID uuid.UUID, guid string) err
 	}
 
 	return nil
-}
-
-func (ws *Websocket) runWebsocketLoop(ctx context.Context) {
-	log.Println("websocket loop is running")
-	defer close(ws.done)
-	defer log.Println("websocket loop closed")
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			_, msg, err := ws.conn.ReadMessage()
-			if err != nil {
-				log.Println("Error in receive:", err)
-				return
-			}
-
-			// Обрабатываем входящее сообщение
-			err = ws.HandleResponse(msg)
-			if err != nil {
-				log.Println("Error in handle:", err)
-				return
-			}
-		}
-	}
-}
-
-func (ws *Websocket) runQueueLoop(ctx context.Context) {
-	log.Println("websocket queue loop is running")
-	defer log.Println("websocket queue loop closed")
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ws.done:
-			return
-		default:
-			event, err := ws.queue.Dequeue()
-			if err != nil {
-				if errors.Is(err, ErrQueueUnderFlow) {
-					time.Sleep(time.Millisecond * 500)
-					continue
-				}
-
-				log.Println("Error in receive:", err)
-				return
-			}
-
-			log.Println("length dequeue", ws.queue.GetLength())
-
-			// log.Println(event)
-
-			// Устанавливаем подписку как активную если по ней пришло событие
-			if !ws.subscriptions[event.Guid].Active {
-				item := ws.subscriptions[event.Guid]
-				item.Active = true
-				ws.subscriptions[event.Guid] = item
-			}
-
-			// Последовательное выполнение может занимать много времени - тогда заменить на асинхронные обработчики
-			for _, subscriber := range ws.subscriptions[event.Guid].Items {
-				// Блокируем добавление/удаление любых подписчиков пока не пройдёт handle
-				// Никто не может поменять subscriptions во время вычисления
-				// Добавление или удаление из-за этого может занять продолжительное время
-				ws.mu.Lock()
-
-				if subscriber == nil || subscriber.Done {
-					// Разблокируем удаление подписчиков
-					ws.mu.Unlock()
-					continue
-				}
-
-				// TODO: Выполнять все вместе параллельно или каждый с асинхронным обработчиком?
-				// Синхронное выполнение с задержкой хотя-бы одного воркера может тормозить остальные
-				// Отличная идея - выполнять сабскриберы в горутинах. Тогда отставать будет самый нагруженный
-				// А легковесные будут пролетать со свистом
-
-				// !Проблема синхронизации между воркерами - один имеет актуальное состояние, а другой нет
-				// Как решить - непонятно. Если только сравнивать длину очередей. Если с маленькой погрешностью не отличаются
-				// Идея! Если нужно сделать зависимые сабскриберы - делать для них асинхронную оболочку и внутри обрабатывать события синхронно
-				// subscribersGroup - интерфейс как у сабскрибера
-
-				// !Проблема отставания от текущей ситуации (решается распараллеливанием) - проверять очередь на количество необработанных элементов
-				// Всё, что работает в реалтайме не должно превышать определённый порог загруженности очереди
-				// Причём, как общей очереди вебсокета, так и в частной очереди сабскрибера
-				// Если очередь переполняется и не разгружается, то отключаем сабскрибера SetDone()
-				// Так мы отсекаем самых медленных подписчиков
-				// TODO: Нужно сделать проверку очереди вебсокета. При достижении 50тысяч, отключать вебсокет и алертить!
-				// Или отключать всех сабскриберов
-				// Если очередь больше дельты, не отправлять команды брокеру.
-				// Работают только самые шустрые, медленные отключаются
-
-				// В каждом сабскрибере делать свой контекст с отменой от родительского. Отменять горутину когда сабскрибер будет удаляться.
-
-				if err := subscriber.HandleEvent(event); err != nil {
-					subscriber.SetDone()
-					log.Println(subscriber.ID, "Error in handle:", err)
-				}
-
-				// Разблокируем удаление подписчиков
-				ws.mu.Unlock()
-			}
-		}
-	}
 }
 
 func (ws *Websocket) AddSubscriber(token string, subscriber *Subscriber) error {
@@ -391,7 +272,18 @@ func (ws *Websocket) Subscribe(token string, subscriber *Subscriber, subscriptio
 		return err
 	}
 
-	ws.AddSubscription(subscription, subscriber)
+	// Создать подписку если она не существует
+	_, ok := ws.subscriptions[subscription.Guid]
+	if !ok {
+		ws.subscriptions[subscription.Guid] = SubscriptionState{
+			Subscription: subscription,                       // Подписка
+			Active:       false,                              // Пришло ли хоть одно сообщение по ней
+			Items:        make(map[SubscriberID]*Subscriber), // Подписчики
+		}
+	}
+
+	// Добавить подписчика в полдписку
+	ws.subscriptions[subscription.Guid].Items[SubscriberID(subscriber.ID)] = subscriber
 
 	return nil
 }

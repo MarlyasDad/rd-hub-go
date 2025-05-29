@@ -57,27 +57,21 @@ func (c *Client) Connect(ctx context.Context, websocket bool) error {
 		return err
 	}
 
-	token, err := c.Token.GetAccessToken()
-	if err != nil {
-		return err
-	}
-
 	if websocket {
-		err = c.Websocket.Connect(ctx, token)
-		if err != nil {
-			return err
-		}
-
-		go c.runWebsocketHealthLoop(ctx)
+		c.Websocket.StartHealthLoop(ctx, c.Token)
 	}
 
 	return nil
 }
 
-func (c *Client) Stop() {
+func (c *Client) Stop(websocket bool) {
 	token, err := c.Token.GetAccessToken()
 	if err != nil {
 		return
+	}
+
+	if websocket {
+		c.Websocket.StopHealthLoop()
 	}
 
 	if err := c.Websocket.RemoveAllSubscribers(token); err != nil {
@@ -126,26 +120,4 @@ func (c *Client) GetSubscribers() []*Subscriber {
 
 func (c *Client) GetAllSubscriberBars(subscriberID uuid.UUID) ([]*Bar, error) {
 	return c.Websocket.GetAllSubscriberBars(subscriberID)
-}
-
-func (c *Client) runWebsocketHealthLoop(ctx context.Context) {
-	log.Println("websocket health loop is running")
-	defer log.Println("websocket health loop closed")
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-c.Websocket.done:
-			time.Sleep(time.Second * 10)
-			log.Println("try to websocket reconnect")
-			token, err := c.Token.GetAccessToken()
-			if err != nil {
-				return
-			}
-
-			if err := c.Websocket.Reconnect(ctx, token); err != nil {
-				log.Println(err)
-			}
-		}
-	}
 }

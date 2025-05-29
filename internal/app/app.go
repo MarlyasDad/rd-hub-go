@@ -142,7 +142,7 @@ func (a *App) Stop() error {
 	// Прекращаем получать команды от http
 	a.httpServer.Stop()
 	// Отключаемся от брокера
-	a.brokerClient.Stop()
+	a.brokerClient.Stop(true)
 
 	slog.Info("The RD-Hub completed correctly")
 
