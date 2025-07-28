@@ -39,3 +39,6 @@ func (c *Client) GetAllSecurities(ticker string, limit int64, offset int64, sect
 	}
 	fmt.Println(string(body))
 }
+
+// riskCategoryId можно узнать командой https://alor.dev/docs/api/http/md-v-2-clients-exchange-portfolio-risk-get
+//в exchange пропишите UNITED, портфель указывайте ЕДП (E*****)

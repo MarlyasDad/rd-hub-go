@@ -21,11 +21,36 @@ type (
 	}
 
 	addSubscriberRequest struct {
-		Description string `json:"description" validate:"required"`
-		Exchange    string `json:"exchange" validate:"oneof=MOEX SPBX"`
-		Code        string `json:"code" validate:"required"`
-		Board       string `json:"board" validate:"required"`
-		Timeframe   int64  `json:"timeframe"`
+		Description   string               `json:"description" validate:"required"`
+		Exchange      string               `json:"exchange" validate:"oneof=MOEX SPBX"`
+		Code          string               `json:"code" validate:"required"`
+		Board         string               `json:"board" validate:"required"`
+		Timeframe     int64                `json:"timeframe"`
+		Subscriptions requestSubscriptions `json:"subscriptions"`
+		From          int64                `json:"from"` // Запрос истории с этой даты
+	}
+
+	requestSubscriptions struct {
+		AllTrades requestAllTrades `json:"allTrades"`
+		OrderBook requestOrderBook `json:"orderBook"`
+		Bars      requestBars      `json:"bars"`
+	}
+
+	requestAllTrades struct {
+		WithDelta            bool  `json:"withDelta"`
+		WithMarketProfile    bool  `json:"withMarketProfile"`
+		Depth                int64 `json:"depth"` // для захлёста истории во избежание потери данных
+		IncludeVirtualTrades bool  `json:"includeVirtualTrades"`
+	}
+
+	requestOrderBook struct {
+		WithOrderFlow bool  `json:"withOrderFlow"`
+		Depth         int64 `json:"depth"` // глубина стакана в одну сторону
+	}
+
+	requestBars struct {
+		WithOrderFlow bool  `json:"withOrderFlow"`
+		Depth         int64 `json:"depth"` // глубина стакана в одну сторону
 	}
 )
 

@@ -10,12 +10,13 @@ import (
 )
 
 type Client struct {
-	Config    Config
-	Hosts     Hosts
-	Token     Token
-	Client    *http.Client
-	Websocket *Websocket
-	mu        sync.Mutex
+	Config      Config
+	Hosts       Hosts
+	Token       Token
+	Client      *http.Client
+	Websocket   *Websocket
+	Subscribers Subscribers /// Где, блядь, эти ебаные подписчики должны быть?!
+	mu          sync.Mutex
 }
 
 func New(config Config) *Client {
@@ -43,11 +44,12 @@ func New(config Config) *Client {
 	// httpClient := &http.Client{Transport: &http.Transport{}}
 
 	return &Client{
-		Config:    config,
-		Hosts:     hosts,
-		Token:     NewToken(config.RefreshToken, config.RefreshTokenExp),
-		Client:    httpClient,
-		Websocket: NewWebsocket(hosts.Websocket),
+		Config:      config,
+		Hosts:       hosts,
+		Token:       NewToken(config.RefreshToken, config.RefreshTokenExp),
+		Client:      httpClient,
+		Websocket:   NewWebsocket(hosts.Websocket),
+		Subscribers: NewSubscribers(),
 	}
 }
 
@@ -58,27 +60,33 @@ func (c *Client) Connect(ctx context.Context, websocket bool) error {
 	}
 
 	if websocket {
-		c.Websocket.StartHealthLoop(ctx, c.Token)
+		// Инициализируем первое подключение
+		if err := c.Websocket.Connect(); err != nil {
+			log.Fatal("Ошибка первоначального подключения:", err)
+		}
+
+		// Запускаем горутину для переподключения
+		go c.Websocket.ReconnectHandler(ctx, c.Token)
+
+		// Запускаем разбор очереди
+		go c.Websocket.SortQueue(ctx, c.Token)
+		// Запускаем слушатель сообщений
+		go c.Websocket.Listen()
 	}
 
 	return nil
 }
 
-func (c *Client) Stop(websocket bool) {
+func (c *Client) Stop() {
 	token, err := c.Token.GetAccessToken()
 	if err != nil {
 		return
 	}
 
-	if websocket {
-		c.Websocket.StopHealthLoop()
-	}
-
 	if err := c.Websocket.RemoveAllSubscribers(token); err != nil {
 		log.Println("ahalai mahalai")
 	}
-
-	if err := c.Websocket.Disconnect(); err != nil {
+	if err := c.Websocket.Close(); err != nil {
 		log.Println("abra kadabra")
 	}
 }
@@ -88,12 +96,7 @@ func (c *Client) GetSubscriber(subscriberID uuid.UUID) (*Subscriber, error) {
 }
 
 func (c *Client) AddSubscriber(subscriber *Subscriber) error {
-	token, err := c.Token.GetAccessToken()
-	if err != nil {
-		return err
-	}
-
-	return c.Websocket.AddSubscriber(token, subscriber)
+	return c.Websocket.AddSubscriber(c.Token, subscriber)
 }
 
 func (c *Client) RemoveSubscriber(subscriberID uuid.UUID) error {

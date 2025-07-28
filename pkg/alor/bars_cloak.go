@@ -12,6 +12,7 @@ var (
 
 type BarQueue struct {
 	Elements []*Bar
+	Tags     map[int64]*Bar
 	Size     int
 	Len      int
 	mu       sync.Mutex
@@ -20,6 +21,7 @@ type BarQueue struct {
 func NewBarQueue(size int) *BarQueue {
 	return &BarQueue{
 		Elements: make([]*Bar, 0),
+		Tags:     make(map[int64]*Bar),
 		Size:     size,
 		Len:      0,
 		mu:       sync.Mutex{},
@@ -33,10 +35,14 @@ func (q *BarQueue) Enqueue(bar *Bar) error {
 	if q.GetLength() == q.Size {
 		// return ErrQueueOverFlow
 		// Если максимальный размер, удаляем самый старый элемент
-		_, _ = q.Dequeue()
+		dequeueBar, err := q.Dequeue()
+		if err == nil {
+			delete(q.Tags, dequeueBar.Timestamp)
+		}
 	}
 
 	q.Elements = append(q.Elements, bar)
+	q.Tags[bar.Timestamp] = bar
 	q.Len++
 
 	return nil
@@ -84,21 +90,46 @@ func (q *BarQueue) GetActiveBar() (*Bar, error) {
 
 func (q *BarQueue) GetLastFinalizedBar() (*Bar, error) {
 	if len(q.Elements) <= 1 {
-		return nil, errors.New("no available bars")
+		return nil, errors.New("bar not found")
 	}
 	return q.Elements[1], nil
 }
 
-func (q *BarQueue) GetSpecificBar(index int64) *Bar {
-	return q.Elements[index]
+func (q *BarQueue) GetBarByIndex(index int64) (*Bar, error) {
+	if index < 0 || index >= int64(len(q.Elements)) {
+		return nil, errors.New("index out of range")
+	}
+
+	return q.Elements[index], nil
 }
 
-func (q *BarQueue) GetAllBars() []*Bar {
-	return q.Elements
+func (q *BarQueue) GetBarByTimestamp(timestamp int64) (*Bar, error) {
+	bar, ok := q.Tags[timestamp]
+	if !ok {
+		return nil, errors.New("bar not found")
+	}
+
+	return bar, nil
 }
 
-func (q *BarQueue) GetBarsRange(start, end int64) []*Bar {
-	return q.Elements[start:end]
+func (q *BarQueue) GetAllBars() ([]*Bar, error) {
+	if q.IsEmpty() {
+		return nil, errors.New("empty queue")
+	}
+
+	return q.Elements, nil
+}
+
+func (q *BarQueue) GetBarsRange(start, end int64) ([]*Bar, error) {
+	if start < 0 || start >= int64(len(q.Elements)) {
+		return nil, errors.New("start out of range")
+	}
+
+	if end < 0 || end >= int64(len(q.Elements)) {
+		return nil, errors.New("end out of range")
+	}
+
+	return q.Elements[start:end], nil
 }
 
 func (q *BarQueue) GetHeikenAshiBarsRange(start, end int64) ([]*Bar, error) {

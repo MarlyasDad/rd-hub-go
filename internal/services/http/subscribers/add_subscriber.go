@@ -2,72 +2,138 @@ package subscribers
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"github.com/MarlyasDad/rd-hub-go/pkg/alor"
 	"github.com/google/uuid"
 	"log"
 	"time"
 )
 
+// {
+//    "description": "Если нужно описание, то оно должно быть туть",
+//    // Параметры инструмента
+//    "instrument": {
+//        "exchange": "MOEX",
+//        "code": "UWGN",
+//        "board": "TQBR",
+//        "timeframe": 300
+//    },
+//    // Параметры стратегии
+//    "strategy": {
+//        // Название стратегии, которую мы хотим использовать
+//        // "strategy_name": "blank_strategy",
+//        // "strategy_name": "proxy_strategy",
+//        "name": "trailing_stop",
+//        // Индивидуальные параметры стратегии (опционально, для каждой стратегии свои)
+//        "settings": {
+//            "close_under": 123.00,
+//            "close_above": 456.00,
+//            "slippage": 10,
+//            "side": "buy",
+//            "volume": 50
+//        },
+//        // Детализация данных (опционально, если не указано, то значения по-умолчанию)
+//        "withDelta": true,
+//        "withMarketProfile": true,
+//        "withOrderBookProfile": true,
+//        // Параметры подписок (опционально, если не указано, то значения по-умолчанию)
+//        "subscriptions": {
+//            "allTradesParams": {
+//                "depth": 0,
+//                "includeVirtualtrades": false
+//            },
+//            "orderBookParams": {
+//                "depth": 10
+//            },
+//            "barsParams": {
+//                "skipHitory": false,
+//                "splitAdjust": true
+//            }
+//        },
+//        // Индикаторы (опционально, если не указано, то не считаются)
+//        "indicators": [
+//            {
+//                // Название индикатора, который мы хотим использовать
+//                "name": "EMA",
+//                // Индивидуальные параметры индикатора (опционально, для каждого индикатора свои)
+//                "params": {
+//                    "period": 42
+//                }
+//            }
+//        ],
+//        "async": false
+//    }
+//}
+
 type AddSubscriberParams struct {
-	Description       string
-	Exchange          string
-	Code              string
-	Board             string
-	Timeframe         int64
-	WithDelta         bool
-	WithMarketProfile bool
-	WithOrderFlow     bool
+	Description string
+	Instrument  InstrumentParams `json:"instrument"`
+	Strategy    StrategyParams   `json:"strategy"`
+	Async       bool             `json:"async"`
 }
 
-func (s Service) AddSubscriber(ctx context.Context, params AddSubscriberParams) (uuid.UUID, error) { // FromAlltrades
+type InstrumentParams struct {
+	Exchange  string
+	Code      string
+	Board     string
+	Timeframe int64
+}
+
+type StrategyParams struct {
+	Name              string          `json:"name"`
+	Settings          json.RawMessage `json:"settings"`
+	WithDelta         bool            `json:"with_delta"`
+	WithMarketProfile bool            `json:"with_market_profile"`
+	WithOrderFlow     bool            `json:"with_order_flow"`
+}
+
+type SubscriptionsParams struct {
+}
+
+func (s Service) AddSubscriber(ctx context.Context, params AddSubscriberParams) (alor.SubscriberID, error) { // FromAlltrades
 	var options []alor.SubscriberOption
 
-	// testHandler := barsToFileCommand.New("UWGN.txt")
+	// params
 
-	if params.WithDelta {
-		options = append(options, alor.WithDeltaData())
+	if params.Strategy.WithDelta {
+		options = append(options, alor.WithDelta())
 	}
 
-	if params.WithMarketProfile {
-		options = append(options, alor.WithMarketProfileData())
+	if params.Strategy.WithMarketProfile {
+		options = append(options, alor.WithMarketProfile())
 	}
 
-	if params.WithOrderFlow {
-		options = append(options, alor.WithOrderFlowData())
+	if params.Strategy.WithOrderFlow {
+		options = append(options, alor.WithOrderBookProfile())
 	}
 
-	options = append(options, alor.WithAllTradesSubscription(0, false))
-	options = append(options, alor.WithOrderBookSubscription(10))
+	options = append(options, alor.WithAllTradesSubscription(0, 50, false))
+	options = append(options, alor.WithOrderBookSubscription(0, 10))
 	// options = append(options, alor.WithCustomHandler(testHandler))
 
 	// Подписчик создаётся с ready = false. Все новые события начинают накапливаться в очереди
-	testSubscriber, err := alor.NewSubscriber(
+	testSubscriber := alor.NewSubscriber(
 		params.Description,
-		params.Exchange,
-		params.Code,
-		params.Board,
-		params.Timeframe,
+		alor.Exchange(params.Instrument.Exchange),
+		params.Instrument.Code,
+		params.Instrument.Board,
+		alor.Timeframe(params.Instrument.Timeframe),
+		false,
 		options...,
 	)
-	if err != nil {
-		return uuid.Nil, err
-	}
-
-	// Начинаем получать события
-	if err := s.brokerClient.AddSubscriber(testSubscriber); err != nil {
-		return uuid.Nil, err
-	}
+	//if err != nil {
+	//	return uuid.Nil, err
+	//}
 
 	// GET данные прошлых сессий
 	// Отправляем все данные в подписчика ====>
 
-	// GET данные текущей сессии
+	// GET данные текущей сессии по alltrades
 	from := time.Now().AddDate(0, 0, -1).Unix()
 	historyParams := alor.GetAllTradesV2Params{
 		Exchange:     alor.MOEXExchange,
-		Symbol:       "UWGN",
-		Board:        "TQBR",
+		Symbol:       params.Instrument.Code,
+		Board:        params.Instrument.Board,
 		From:         &from,
 		Descending:   false,
 		JsonResponse: true,
@@ -92,10 +158,10 @@ func (s Service) AddSubscriber(ctx context.Context, params AddSubscriberParams) 
 
 		// Отправляем все данные в подписчика ====>
 		for _, event := range events {
+			// TODO: HANDLE UNIVESAL
 			if err := testSubscriber.HandleHistoryAlltrades(event); err != nil {
-				if !errors.Is(err, alor.ErrNewBarFound) {
-					return testSubscriber.ID, err
-				}
+				return testSubscriber.ID, err
+
 			}
 		}
 
@@ -105,38 +171,17 @@ func (s Service) AddSubscriber(ctx context.Context, params AddSubscriberParams) 
 	}
 	log.Println("get data for ", testSubscriber.ID, " finished")
 
-	// Блокируем подписчика на прием событий, чтобы мы могли очистить очередь
-	testSubscriber.SetWait()
-	log.Printf("subscriber %s is blocked", testSubscriber.ID)
-
-	// После всех манипуляций делаем подписчика активным
+	// Активируем стратегии
 	testSubscriber.SetReady()
 	log.Printf("subscriber %s ready to work", testSubscriber.ID)
 
-	// Отправляем все данные из очереди в подписчика ====>
-	for {
-		event, err := testSubscriber.Queue.Dequeue()
-		if err != nil {
-			if errors.Is(err, alor.ErrQueueUnderFlow) {
-				log.Printf("subscriber %s queue underflow %s", testSubscriber.ID, err.Error())
-			} else {
-				log.Printf("subscriber %s deque error %s", testSubscriber.ID, err.Error())
-			}
-
-			break
-		}
-
-		log.Printf("subscriber %s queue length %d", testSubscriber.ID, testSubscriber.Queue.Len)
-
-		if err := testSubscriber.HandleHistoryEvent(event); err != nil {
-			return testSubscriber.ID, err
-		}
+	// TODO: Получаем с захлёстом в 50 событий
+	// Начинаем получать новые события
+	if err := s.brokerClient.AddSubscriber(testSubscriber); err != nil {
+		return alor.SubscriberID(uuid.Nil), err
 	}
-	log.Printf("subscribers %s queue is empty", testSubscriber.ID)
 
-	// Разблокируем подписчика
-	testSubscriber.ReleaseWait()
 	log.Printf("subscriber %s successfully added", testSubscriber.ID)
 
-	return testSubscriber.ID, err
+	return testSubscriber.ID, nil
 }

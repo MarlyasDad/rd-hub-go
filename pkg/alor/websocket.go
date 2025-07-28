@@ -10,115 +10,195 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 func NewWebsocket(url string) *Websocket {
 	return &Websocket{
 		url:           url,
-		subscribers:   make(map[SubscriberID]*Subscriber),
-		subscriptions: make(map[string]SubscriptionState),
+		subscribers:   NewSubscribers(),
+		subscriptions: NewSubscriptions(),
 		queue:         NewChainQueue(10000),
+		done:          make(chan struct{}),
+		reconnect:     make(chan struct{}, 1),
+		ready:         true,
 	}
 }
 
 type (
-	GUID         string
-	SubscriberID uuid.UUID
+	Websocket struct {
+		url           string
+		connection    *websocket.Conn
+		queue         *ChainQueue
+		subscribers   Subscribers
+		subscriptions Subscriptions
+		done          chan struct{}  // Основной канал для остановки всех горутин
+		reconnect     chan struct{}  // Канал для инициации переподключения
+		isConnecting  atomic.Bool    // Флаг процесса подключения
+		isClosing     atomic.Bool    // Флаг процесса отключения
+		mu            sync.Mutex     // Защищает connection
+		wg            sync.WaitGroup // Для ожидания завершения всех горутин
+		ready         bool
+	}
 )
 
-type SubscriptionState struct {
-	Subscription *Subscription
-	Active       bool
-	Items        map[SubscriberID]*Subscriber
-}
+// Connect безопасно устанавливает соединение с защитой от повторных вызовов
+func (ws *Websocket) Connect() error {
+	// Проверяем и устанавливаем флаг отключения
+	// Если он true, то в данный момент есть активный процесс подключения
+	if ws.isClosing.Load() {
+		return errors.New("websocket отключается")
+	}
 
-type Websocket struct {
-	url           string
-	conn          *websocket.Conn
-	queue         *ChainQueue
-	done          chan interface{}
-	healthDone    chan interface{}
-	subscribers   map[SubscriberID]*Subscriber
-	subscriptions map[string]SubscriptionState
-	metrics       map[string]interface{}
-	mu            sync.Mutex
-}
+	// Проверяем и устанавливаем флаг подключения
+	// Если он true, то в данный момент есть активный процесс подключения
+	if !ws.isConnecting.CompareAndSwap(false, true) {
+		return nil // или можно вернуть ошибку "уже подключается"
+	}
+	defer ws.isConnecting.Store(false)
 
-func (ws *Websocket) Connect(ctx context.Context, token string) error {
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, ws.url, nil)
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	// Если уже подключены - ничего не делаем
+	if ws.connection != nil {
+		return nil
+	}
+
+	log.Printf("Подключение к %s", ws.url)
+
+	conn, _, err := websocket.DefaultDialer.Dial(ws.url, nil)
 	if err != nil {
 		return fmt.Errorf("error connecting to Websocket Server: %w", err)
 	}
-
 	conn.EnableWriteCompression(true)
-	ws.conn = conn
-	//ws.conn.SetCloseHandler(func(code int, text string) error {
-	//	fmt.Println("Websocket disconnected")
-	//	return nil
-	//})
 
-	ws.done = make(chan interface{})
+	ws.connection = conn
+	return nil
+}
 
-	go ws.runQueueLoop(ctx)
-	go ws.runWebsocketLoop(ctx)
-
-	// Восстанавливаем подписки
-	if err := ws.restoreSubscriptions(token); err != nil {
-		return fmt.Errorf("error restoring subscriptions: %w", err)
+// Close безопасно закрывает соединение с защитой от повторных вызовов
+func (ws *Websocket) Close() error {
+	// Проверяем и устанавливаем флаг отключения
+	// Если он true, то в данный момент есть активный процесс отключения
+	if !ws.isClosing.CompareAndSwap(false, true) {
+		return nil // или можно вернуть ошибку "уже отключается"
 	}
+	defer ws.isClosing.Store(false)
+
+	// Блокируем сокет и не даём одновременно
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	// Всегда возвращаем канал в состояние готовности после отключения
+	defer func() { ws.done = make(chan struct{}) }()
+
+	// Сигнализируем о закрытии
+	select {
+	case <-ws.done:
+		return nil // Уже закрыт
+	default:
+		close(ws.done)
+	}
+
+	// Если уже отключены - ничего не делаем
+	if ws.connection == nil {
+		log.Println("already closed")
+		return nil
+	}
+
+	// Сбрасываем подключение при выходе
+	defer func() { ws.connection = nil }()
+
+	log.Println("sending close message")
+	// Отправляем сообщение о закрытии
+	err := ws.connection.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+	if err != nil {
+		log.Println("Ошибка при отправке CloseMessage:", err)
+		return err
+	}
+
+	// Закрываем соединение
+	err = ws.connection.Close()
+	if err != nil {
+		log.Println("Ошибка при закрытии соединения:", err)
+		return err
+	}
+
+	log.Println("waiting all websocket goroutines")
+	// Ждем завершения всех горутин
+	ws.wg.Wait()
+	return nil
+}
+
+func (ws *Websocket) Subscribe(token Token, subscriberID SubscriberID, subscription *Subscription) error {
+	// Подготавливаем запрос
+	requestBytes, err := ws.prepareRequest(token, subscription)
+	if err != nil {
+		return err
+	}
+
+	// отправляем в сокет
+	if err := ws.Send(requestBytes); err != nil {
+		return err
+	}
+
+	// Добавляем подписку в пул
+	ws.subscriptions.Add(subscriberID, subscription)
 
 	return nil
 }
 
-//func (ws *Websocket) Reconnect(ctx context.Context, token string) error {
-//	if err := ws.Disconnect(); err != nil {
-//		return err
+func (ws *Websocket) Unsubscribe(token string, subscriberID SubscriberID, guid GUID) error {
+	request := UnsubscribeRequest{
+		Opcode: UnsubscribeOpcode,
+		Token:  token,
+		GUID:   guid,
+	}
+
+	requestBytes, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
+
+	if err := ws.subscriptions.Delete(subscriberID, guid); err != nil {
+		return err
+	}
+
+	return ws.Send(requestBytes)
+}
+
+//func (ws *Websocket) GetSubscribers() []*Subscriber {
+//	subscribers := make([]*Subscriber, 0)
+//
+//	for _, subscriber := range ws.subscribers.All() {
+//		subscribers = append(subscribers, subscriber)
 //	}
 //
-//	if err := ws.Connect(ctx, token); err != nil {
-//		return err
-//	}
+//	return subscribers
+//}
 //
-//	return nil
+//func (ws *Websocket) GetSubscriptions() []*Subscriber {
+//	subscribers := make([]*Subscriber, 0)
+//	return subscribers
 //}
 
-func (ws *Websocket) Disconnect() error {
-	if ws.IsConnected() {
-		// close(ws.done)
-
-		err := ws.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-		if err != nil {
-			log.Println("Error during sending websocket close message:", err)
-			return err
-		}
-	}
-
-	if ws.conn != nil {
-		err := ws.conn.Close()
-		if err != nil {
-			log.Println("Error during closing websocket:", err)
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (ws *Websocket) IsConnected() bool {
-	if ws.done == nil {
-		return false
-	}
+func (ws *Websocket) Send(message []byte) error {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
 
 	select {
 	case <-ws.done:
-		return false
+		return fmt.Errorf("connection is closing")
 	default:
-		return true
 	}
-}
 
-func (ws *Websocket) SendMessage(msg []byte) error {
-	return ws.conn.WriteMessage(websocket.TextMessage, msg)
+	if ws.connection == nil {
+		return fmt.Errorf("connection is not established")
+	}
+
+	return ws.connection.WriteMessage(websocket.TextMessage, message)
 }
 
 // {
@@ -140,42 +220,78 @@ type WsResponse struct {
 	Guid        string          `json:"guid"`
 }
 
-func (ws *Websocket) HandleResponse(msg []byte) error {
-	// log.Printf("Received: %s\n", msg)
+func (ws *Websocket) Listen() {
+	log.Println("running websocket listen loop")
+	defer log.Println("websocket listen loop closed")
 
-	var response WsResponse
-	err := json.Unmarshal(msg, &response)
-	if err != nil {
-		return err
+	ws.wg.Add(1)
+	defer ws.wg.Done()
+
+	for {
+		select {
+		case <-ws.done:
+			return
+		default:
+			// получаем сообщение
+			_, message, err := ws.connection.ReadMessage()
+			if err != nil {
+				log.Println("Ошибка чтения:", err)
+				select {
+				case ws.reconnect <- struct{}{}:
+				case <-ws.done:
+				}
+				return
+			}
+			// log.Printf("Получено: %s", message)
+
+			// обрабатываем сообщение
+			var response WsResponse
+			err = json.Unmarshal(message, &response)
+			if err != nil {
+				log.Println("unmarshall failed", err)
+				return
+			}
+
+			err = ws.HandleResponse(response)
+			if err != nil {
+				log.Println("error in handle:", err)
+				return
+			}
+		}
+
 	}
+}
 
-	// Проверяем request на ошибку
-	// Проверяем, что это, дата или отбивка
-	// Если отбивка, запускаем метод обработки отбивки
-	// if event == подтверждение подписки
-	// То ...
-	// TODO: ТУТ ОТБИВКИ
-	if response.RequestGuid != "" {
-		log.Printf("Received: %s\n", msg)
-		return nil
+func (ws *Websocket) HandleResponse(message WsResponse) error {
+	if message.RequestGuid == "" && message.Guid == "" {
+		return errors.New("guid is empty")
 	}
-
-	// Если guid пустой, печатаем warning
-	if response.Guid == "" {
-		return nil
-	}
-
-	guidParts := strings.Split(string(response.Guid), "-")
-	opcode := Opcode(guidParts[3]) // from guid
 
 	event := &ChainEvent{
-		Opcode: opcode,
-		Guid:   response.Guid,
-		Data:   response.Data,
+		Data: message.Data,
 	}
 
-	err = ws.queue.Enqueue(event)
+	// отделяем системные сообщения от данных
+	if message.RequestGuid != "" {
+		event.Type = SystemType
+		event.Guid = message.RequestGuid
+	}
+
+	if message.Guid != "" {
+		event.Type = DataType
+		event.Guid = message.Guid
+	}
+
+	guidParts := strings.Split(event.Guid, "-")
+	event.Opcode = Opcode(guidParts[3])
+
+	err := ws.queue.Enqueue(event)
 	if err != nil {
+		if errors.Is(err, ErrQueueOverFlow) {
+			log.Println("queue too big", ws.queue.GetLength())
+			time.Sleep(time.Second * 1)
+			ws.ready = false
+		}
 		return err
 	}
 
@@ -184,39 +300,233 @@ func (ws *Websocket) HandleResponse(msg []byte) error {
 	return nil
 }
 
-func (ws *Websocket) RemoveSubscription(subscriberID uuid.UUID, guid string) error {
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
+func (ws *Websocket) ReconnectHandler(ctx context.Context, token Token) {
+	log.Println("running websocket reconnect loop")
+	defer log.Println("websocket reconnect loop closed")
 
-	// Получаем саму подписку
-	_, ok := ws.subscriptions[guid]
-	if !ok {
-		return errors.New("the subscription is not exists")
+	ws.wg.Add(1)
+	defer ws.wg.Done()
+
+	for {
+		select {
+		case <-ws.reconnect:
+			if ws.isClosing.Load() {
+				continue
+			}
+
+			log.Println("Попытка переподключения...")
+
+			// Закрываем предыдущее соединение, если оно есть
+			// надо ли?
+			//if ws.connection != nil {
+			//	ws.connection.Close()
+			//}
+
+			// Пытаемся подключиться с экспоненциальной задержкой
+			retryDelay := time.Second
+			maxRetryDelay := 30 * time.Second
+
+			for {
+				if ws.isClosing.Load() {
+					break
+				}
+
+				// TODO: надо ли проверять?
+				//select {
+				//case <-ws.done:
+				//	return
+				//default:
+				//}
+
+				err := ws.Connect()
+				if err == nil {
+					log.Println("Переподключение успешно")
+					// Запускаем разбор очереди
+					go ws.SortQueue(ctx, token)
+					// Запускаем слушатель сообщений
+					go ws.Listen()
+
+					if err := ws.restoreSubscriptions(token); err != nil {
+						log.Println(err)
+					}
+					break
+				}
+
+				log.Printf("Ошибка переподключения: %v, следующая попытка через %v", err, retryDelay)
+
+				select {
+				case <-time.After(retryDelay):
+				case <-ws.done:
+					return
+				}
+
+				retryDelay = min(retryDelay*2, maxRetryDelay)
+				// retryDelay = time.Duration(min(int64(retryDelay*2), int64(30*time.Second)))
+			}
+		case <-ws.done:
+			return
+		}
 	}
+}
 
-	// Удаляем подписчика из подписки
-	delete(ws.subscriptions[guid].Items, SubscriberID(subscriberID))
+func (ws *Websocket) restoreSubscriptions(token Token) error {
+	for _, subscriptionState := range ws.subscriptions.All() {
+		requestBytes, err := ws.prepareRequest(token, subscriptionState.Subscription)
+		if err != nil {
+			return err
+		}
 
-	// Удаляем подписку если она пустая
-	if len(ws.subscriptions[guid].Items) == 0 {
-		delete(ws.subscriptions, guid)
+		if err := ws.Send(requestBytes); err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-func (ws *Websocket) AddSubscriber(token string, subscriber *Subscriber) error {
-	log.Println("subscriber ", subscriber.ID, "start subscriptions", subscriber)
+func (ws *Websocket) prepareRequest(token Token, subscription *Subscription) ([]byte, error) {
+	switch subscription.Opcode {
+	case BarsOpcode:
+		return ws.BarsSubscribe(token, subscription)
+	case AllTradesOpcode:
+		return ws.AllTradesSubscribe(token, subscription)
+	case OrderBookOpcode:
+		return ws.OrderBooksSubscribe(token, subscription)
+	}
+
+	return nil, errors.New("invalid opcode")
+}
+
+func (ws *Websocket) SortQueue(ctx context.Context, token Token) {
+	log.Println("running websocket queue loop")
+	defer log.Println("websocket queue loop closed")
+
+	ws.wg.Add(1)
+	defer ws.wg.Done()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return // завершаем когда сервер остановлен
+		case <-ws.done:
+			return // завершаем когда нажали close
+		default:
+			event, err := ws.queue.Dequeue()
+			if err != nil {
+				if errors.Is(err, ErrQueueUnderFlow) {
+					time.Sleep(time.Millisecond * 500)
+					continue
+				}
+
+				log.Println("Error in receive:", err)
+				return
+			}
+
+			// Удаляем и добавляем подписки между итерациями
+			ws.subscriptions.Rebalancing()
+
+			// Удаляем и добавляем подписчиков между итерациями
+			ws.subscribers.Rebalancing()
+
+			log.Println("length dequeue", ws.queue.GetLength())
+
+			// Последовательное выполнение может занимать много времени - тогда заменить на асинхронные обработчики
+			// for _, subscriber := range ws.subscriptions.GetSubscriptionsByGUID(event.Guid) {
+			for _, subscriber := range ws.subscriptions[event.Guid].Items {
+				// Блокируем добавление/удаление любых подписчиков пока не пройдёт handle
+				// Никто не может поменять subscriptions во время вычисления
+				// Добавление или удаление из-за этого может занять продолжительное время
+
+				if subscriber == nil || subscriber.Done {
+					// Разблокируем удаление подписчиков
+					continue
+				}
+
+				// TODO: Выполнять все вместе параллельно или каждый с асинхронным обработчиком?
+				// Синхронное выполнение с задержкой хотя-бы одного воркера может тормозить остальные
+				// Отличная идея - выполнять сабскриберы в горутинах. Тогда отставать будет самый нагруженный
+				// А легковесные будут пролетать со свистом
+
+				// !Проблема синхронизации между воркерами - один имеет актуальное состояние, а другой нет
+				// Как решить - непонятно. Если только сравнивать длину очередей. Если с маленькой погрешностью не отличаются
+				// Идея! Если нужно сделать зависимые сабскриберы - делать для них асинхронную оболочку и внутри обрабатывать события синхронно
+				// subscribersGroup - интерфейс как у сабскрибера
+
+				// !Проблема отставания от текущей ситуации (решается распараллеливанием) - проверять очередь на количество необработанных элементов
+				// Всё, что работает в реалтайме не должно превышать определённый порог загруженности очереди
+				// Причём, как общей очереди вебсокета, так и в частной очереди сабскрибера
+				// Если очередь переполняется и не разгружается, то отключаем сабскрибера SetDone()
+				// Так мы отсекаем самых медленных подписчиков
+				// TODO: Нужно сделать проверку очереди вебсокета. При достижении 50тысяч, отключать вебсокет и алертить!
+				// Или отключать всех сабскриберов
+				// Если очередь больше дельты, не отправлять команды брокеру.
+				// Работают только самые шустрые, медленные отключаются
+
+				// В каждом сабскрибере делать свой контекст с отменой от родительского. Отменять горутину когда сабскрибер будет удаляться.
+
+				// активируем подписку
+				if item, ok := ws.subscriptions[event.Guid]; ok {
+					if !item.Active {
+						item.Active = true
+						ws.subscriptions[event.Guid] = item
+					}
+				}
+
+				if event.Type == SystemType {
+					log.Printf("%+v\n", event)
+				}
+
+				if event.Type == DataType {
+					if err := subscriber.HandleEvent(event); err != nil {
+						subscriber.SetDone()
+						log.Println(subscriber.ID, "Error in handle:", err)
+					}
+				}
+			}
+		}
+	}
+}
+
+// IsConnected проверяет, активно ли соединение WebSocket
+func (ws *Websocket) IsConnected() bool {
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	if ws.connection == nil {
+		return false
+	}
+
+	//  _, _, err := ws.connection.NextReader()
+	//	if err != nil {
+	//		return false
+	//	}
+	//	return true
+
+	// Простая проверка через отправку ping сообщения
+	err := ws.connection.WriteControl(
+		websocket.PingMessage,
+		[]byte{},
+		time.Now().Add(1*time.Second),
+	)
+
+	return err == nil
+}
+
+func (ws *Websocket) AddSubscriber(token Token, subscriber *Subscriber) error {
+	log.Println("subscriber subscribe", subscriber.ID, "start subscriptions", subscriber)
 
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 
 	for _, subscription := range subscriber.Subscriptions {
+		// подписываемся в вебсокете
 		if err := ws.Subscribe(token, subscriber, subscription); err != nil {
 			return err
 		}
 
-		ws.subscriptions[subscription.Guid].Items[SubscriberID(subscriber.ID)] = subscriber
+		// добавляем подписчика в подписку
+		ws.subscriptions.Add(subscription)
+		// ws.subscriptions[subscription.Guid].Items[SubscriberID(subscriber.ID)] = subscriber
 	}
 
 	log.Println("subscriber ", subscriber.ID, "init")
@@ -226,13 +536,20 @@ func (ws *Websocket) AddSubscriber(token string, subscriber *Subscriber) error {
 		}
 	}
 
-	ws.subscribers[SubscriberID(subscriber.ID)] = subscriber
+	// добавляем подписчика в список подписчиков
+	ws.subscribers.Add(subscriber)
+	// ws.subscribers[SubscriberID(subscriber.ID)] = subscriber
 
 	return nil
 }
 
 func (ws *Websocket) RemoveSubscriber(token string, subscriberID uuid.UUID) error {
-	subscriber, ok := ws.subscribers[SubscriberID(subscriberID)]
+	log.Println("subscriber unsubscribe", subscriberID, "stop subscriptions")
+
+	ws.mu.Lock()
+	defer ws.mu.Unlock()
+
+	subscriber, ok := ws.subscribers.Get(SubscriberID(subscriberID))
 	if !ok {
 		// TODO: Error
 		return nil
@@ -254,80 +571,9 @@ func (ws *Websocket) RemoveSubscriber(token string, subscriberID uuid.UUID) erro
 		}
 	}
 
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
-
 	delete(ws.subscribers, SubscriberID(subscriberID))
 
 	return nil
-}
-
-func (ws *Websocket) Subscribe(token string, subscriber *Subscriber, subscription *Subscription) error {
-	requestBytes, err := ws.prepareRequest(token, subscription)
-	if err != nil {
-		return err
-	}
-
-	if err := ws.SendMessage(requestBytes); err != nil {
-		return err
-	}
-
-	// Создать подписку если она не существует
-	_, ok := ws.subscriptions[subscription.Guid]
-	if !ok {
-		ws.subscriptions[subscription.Guid] = SubscriptionState{
-			Subscription: subscription,                       // Подписка
-			Active:       false,                              // Пришло ли хоть одно сообщение по ней
-			Items:        make(map[SubscriberID]*Subscriber), // Подписчики
-		}
-	}
-
-	// Добавить подписчика в полдписку
-	ws.subscriptions[subscription.Guid].Items[SubscriberID(subscriber.ID)] = subscriber
-
-	return nil
-}
-
-func (ws *Websocket) prepareRequest(token string, subscription *Subscription) ([]byte, error) {
-	switch subscription.Opcode {
-	case BarsOpcode:
-		return ws.BarsSubscribe(token, subscription)
-	case AllTradesOpcode:
-		return ws.AllTradesSubscribe(token, subscription)
-	case OrderBookOpcode:
-		return ws.OrderBooksSubscribe(token, subscription)
-	}
-
-	return nil, errors.New("invalid opcode")
-}
-
-func (ws *Websocket) Unsubscribe(token string, subscriberID uuid.UUID, guid string) error {
-	if err := ws.RemoveSubscription(subscriberID, guid); err != nil {
-		return err
-	}
-
-	// Выйти если ещё остались подписчики
-	_, ok := ws.subscriptions[guid]
-	if !ok {
-		return errors.New("the subscription is not exists")
-	}
-
-	if len(ws.subscriptions[guid].Items) > 0 {
-		return nil
-	}
-
-	request := UnsubscribeRequest{
-		Opcode: UnsubscribeOpcode,
-		Token:  token,
-		GUID:   guid,
-	}
-
-	requestBytes, err := json.Marshal(request)
-	if err != nil {
-		return err
-	}
-
-	return ws.SendMessage(requestBytes)
 }
 
 func (ws *Websocket) GetSubscriber(subscriberID uuid.UUID) (*Subscriber, error) {
@@ -339,16 +585,6 @@ func (ws *Websocket) GetSubscriber(subscriberID uuid.UUID) (*Subscriber, error) 
 	return subscriber, nil
 }
 
-func (ws *Websocket) GetSubscribers() []*Subscriber {
-	subscribers := make([]*Subscriber, 0)
-
-	for _, subscriber := range ws.subscribers {
-		subscribers = append(subscribers, subscriber)
-	}
-
-	return subscribers
-}
-
 func (ws *Websocket) RemoveAllSubscribers(token string) error {
 	for _, subscriber := range ws.subscribers {
 		_ = ws.RemoveSubscriber(token, subscriber.ID)
@@ -357,26 +593,11 @@ func (ws *Websocket) RemoveAllSubscribers(token string) error {
 	return nil
 }
 
-func (ws *Websocket) GetAllSubscriberBars(subscriberID uuid.UUID) ([]*Bar, error) {
+func (ws *Websocket) GetAllStrategyBars(subscriberID uuid.UUID) ([]*Bar, error) {
 	subscriber, ok := ws.subscribers[SubscriberID(subscriberID)]
 	if !ok {
 		return nil, errors.New("subscriber does not exist")
 	}
 
-	return subscriber.BarsProcessor.bars.GetAllBars(), nil
-}
-
-func (ws *Websocket) restoreSubscriptions(token string) error {
-	for _, subscriptionState := range ws.subscriptions {
-		requestBytes, err := ws.prepareRequest(token, subscriptionState.Subscription)
-		if err != nil {
-			return err
-		}
-
-		if err := ws.SendMessage(requestBytes); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return subscriber.Strategy.DataProcessor.bars.GetAllBars(), nil
 }

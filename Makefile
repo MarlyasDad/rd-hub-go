@@ -56,3 +56,10 @@ compose-rs: ## remove previously and start new local env
 .PHONY: .activate-notebooks
 .activate-notebooks:
 	source $(CURDIR)/notebooks/venv/bin/activate
+
+.test-coverprofile:
+	go test -coverprofile=coverage.out ./...
+	go tool cover -html=coverage.out
+
+.total-coverage:
+	go test -cover ./... | awk '/coverage:/ {sum+=$4; count++} END {print "Total coverage:", sum/count "%"}'

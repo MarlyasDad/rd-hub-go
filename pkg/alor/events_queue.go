@@ -5,7 +5,15 @@ import (
 	"sync"
 )
 
+type EventType string
+
+const (
+	SystemType EventType = "system"
+	DataType   EventType = "data"
+)
+
 type ChainEvent struct {
+	Type   EventType
 	Opcode Opcode
 	Guid   string
 	Data   json.RawMessage
@@ -14,8 +22,8 @@ type ChainEvent struct {
 
 type ChainQueue struct {
 	// Elements  []ChainEvent
-	Size      int
-	Len       int
+	Size      int `json:"size"`
+	Len       int `json:"len"`
 	mu        sync.Mutex
 	firstElem *ChainEvent
 	lastElem  *ChainEvent
