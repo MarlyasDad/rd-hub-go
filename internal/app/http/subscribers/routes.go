@@ -1,6 +1,7 @@
 package subscribers
 
 import (
+	"github.com/MarlyasDad/rd-hub-go/internal/app/http/bars"
 	"github.com/MarlyasDad/rd-hub-go/pkg/alor"
 	"net/http"
 
@@ -29,7 +30,7 @@ func RegisterRoutes(mux *http.ServeMux, brokerClient *alor.Client) {
 	getSubscriberBarsPattern := "GET /api/subscriber/{subscriber_id}/bars"
 	mux.Handle(
 		getSubscriberBarsPattern,
-		NewSubscriberBarsHandler(
+		bars.NewSubscriberBarsHandler(
 			httpSubscribersCommand.New(brokerClient),
 			getSubscriberBarsPattern,
 		),

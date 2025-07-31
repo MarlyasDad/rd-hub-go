@@ -2,6 +2,7 @@ package alor
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"log"
@@ -20,7 +21,8 @@ func NewSubscriber(description string, exchange Exchange, code string, board str
 		Timeframe:     timeframe,
 		Storage:       newStorage(),
 		DataProcessor: NewDataProcessor(timeframe),
-		Handlers:      make(map[Opcode]Strategy),
+		Subscriptions: make(map[Opcode]*Subscription),
+		Strategy:      nil,
 		Ready:         false,
 		Async:         async,
 		Queue:         NewChainQueue(10000),
@@ -43,30 +45,48 @@ func NewSubscriber(description string, exchange Exchange, code string, board str
 // table Datasets in DB
 // Да!
 
-type (
-	SubscriberID uuid.UUID
+type SubscriberID uuid.UUID
 
-	Subscriber struct {
-		ID            SubscriberID            `json:"id"`
-		Description   string                  `json:"description"`
-		CreatedAt     time.Time               `json:"created_at"`
-		Exchange      Exchange                `json:"exchange"`
-		Code          string                  `json:"code"`
-		Board         string                  `json:"board"`
-		Timeframe     Timeframe               `json:"timeframe"`
-		Subscriptions map[Opcode]Subscription `json:"subscriptions"` // Подписки на инструменты
-		Ready         bool                    `json:"ready"`
-		Storage       *Storage                `json:"storage"` // Для передачи пользовательских состояний между обработчиками
-		Handlers      map[Opcode]Strategy     `json:"-"`       // Обработчики для новых данных
-		DataProcessor *DataProcessor          `json:"-"`       // Бары, индикаторы, читает стратегию и добавляет индикаторы, можно добавлять пользовательские индикаторы
-		Async         bool                    `json:"async"`   // Асинхронный режим
-		Queue         *ChainQueue             `json:"queue"`   // Очередь для асинхронной обработки
-		Done          bool                    `json:"done"`
-		commandBus    *int
-		messageBus    *int
-		wg            sync.WaitGroup
+func (sid SubscriberID) String() string {
+	return uuid.UUID(sid).String()
+}
+
+// MarshalJSON реализует json.Marshaler
+func (sid SubscriberID) MarshalJSON() ([]byte, error) {
+	return json.Marshal(uuid.UUID(sid).String())
+}
+
+// UnmarshalJSON реализует json.Unmarshaler
+func (sid *SubscriberID) UnmarshalJSON(data []byte) error {
+	id, err := uuid.ParseBytes(data)
+	if err != nil {
+		return err
 	}
-)
+
+	*sid = SubscriberID(id)
+	return nil
+}
+
+type Subscriber struct {
+	ID            SubscriberID             `json:"id"`
+	Description   string                   `json:"description"`
+	CreatedAt     time.Time                `json:"created_at"`
+	Exchange      Exchange                 `json:"exchange"`
+	Code          string                   `json:"code"`
+	Board         string                   `json:"board"`
+	Timeframe     Timeframe                `json:"timeframe"`
+	Subscriptions map[Opcode]*Subscription `json:"subscriptions"` // Подписки на инструменты
+	Ready         bool                     `json:"ready"`
+	Storage       *Storage                 `json:"storage"` // Для передачи пользовательских состояний между обработчиками
+	Strategy      Strategy                 `json:"-"`       // Стратегия
+	DataProcessor *DataProcessor           `json:"-"`       // Бары, индикаторы, читает стратегию и добавляет индикаторы, можно добавлять пользовательские индикаторы
+	Async         bool                     `json:"async"`   // Асинхронный режим
+	Queue         *ChainQueue              `json:"queue"`   // Очередь для асинхронной обработки
+	Done          bool                     `json:"done"`
+	commandBus    *int
+	messageBus    *int
+	wg            sync.WaitGroup
+}
 
 func (s *Subscriber) Init() error { return nil }
 
@@ -82,7 +102,6 @@ type SubscriberOption func(strategy *Subscriber)
 func WithDelta() SubscriberOption {
 	return func(s *Subscriber) {
 		s.DataProcessor.detailing.delta = true
-		s.DataProcessor.detailing.disableBars = true
 	}
 }
 
@@ -90,7 +109,6 @@ func WithDelta() SubscriberOption {
 func WithMarketProfile() SubscriberOption {
 	return func(s *Subscriber) {
 		s.DataProcessor.detailing.marketProfile = true
-		s.DataProcessor.detailing.disableBars = true
 	}
 }
 
@@ -116,10 +134,10 @@ func WithAllTradesSubscription(frequency int, depth int, includeVirtualTrades bo
 	return func(s *Subscriber) {
 		// GUID не меняется за всё время существования подписки
 		guid := fmt.Sprintf("%s-%s-%s-%s-%s",
+			AllTradesOpcode,
 			s.Exchange,
 			s.Code,
 			s.Board,
-			AllTradesOpcode,
 			SlimResponseFormat,
 		)
 
@@ -135,8 +153,8 @@ func WithAllTradesSubscription(frequency int, depth int, includeVirtualTrades bo
 			frequency = 10
 		}
 
-		s.Subscriptions[AllTradesOpcode] = Subscription{
-			GUID:            guid,
+		s.Subscriptions[AllTradesOpcode] = &Subscription{
+			GUID:            GUID(guid),
 			Exchange:        s.Exchange,
 			Code:            s.Code,
 			InstrumentGroup: s.Board,
@@ -156,11 +174,11 @@ func WithOrderBookSubscription(frequency int, depth int) SubscriberOption {
 		// GUID не меняется за всё время существования подписки
 		guid := fmt.Sprintf(
 			"%s-%s-%s-%s-%d-%s",
+			OrderBookOpcode,
 			s.Exchange,
 			s.Code,
 			s.Board,
-			OrderBookOpcode,
-			depth, // TODO: Надо тут????
+			depth,
 			SlimResponseFormat,
 		)
 
@@ -176,8 +194,8 @@ func WithOrderBookSubscription(frequency int, depth int) SubscriberOption {
 			frequency = 10
 		}
 
-		s.Subscriptions[OrderBookOpcode] = Subscription{
-			GUID:            guid,
+		s.Subscriptions[OrderBookOpcode] = &Subscription{
+			GUID:            GUID(guid),
 			Exchange:        s.Exchange,
 			Code:            s.Code,
 			InstrumentGroup: s.Board,
@@ -195,12 +213,12 @@ func WithBarsSubscription(frequency int, from int64, skipHistory, splitAdjust bo
 	return func(s *Subscriber) {
 		// GUID не меняется за всё время существования подписки
 		guid := fmt.Sprintf(
-			"%s-%s-%s-%d-%s-%s",
+			"%s-%s-%s-%s-%d-%s",
+			BarsOpcode,
 			s.Exchange,
 			s.Code,
 			s.Board,
 			s.Timeframe,
-			BarsOpcode,
 			SlimResponseFormat,
 		)
 
@@ -212,8 +230,8 @@ func WithBarsSubscription(frequency int, from int64, skipHistory, splitAdjust bo
 			frequency = 10
 		}
 
-		s.Subscriptions[BarsOpcode] = Subscription{
-			GUID:            guid,
+		s.Subscriptions[BarsOpcode] = &Subscription{
+			GUID:            GUID(guid),
 			Exchange:        s.Exchange,
 			Code:            s.Code,
 			InstrumentGroup: s.Board,
@@ -235,9 +253,15 @@ func WithAsyncHandle() SubscriberOption {
 	}
 }
 
-func WithStrategy(opcode Opcode, strategy Strategy) SubscriberOption {
+func WithStrategy(strategy Strategy) SubscriberOption {
 	return func(s *Subscriber) {
-		s.Handlers[opcode] = strategy
+		s.Strategy = strategy
+	}
+}
+
+func WithStorage(storage *Storage) SubscriberOption {
+	return func(s *Subscriber) {
+		s.Storage = storage
 	}
 }
 
@@ -257,17 +281,15 @@ func (s *Subscriber) HandleEventSync(event *ChainEvent) error {
 			return err
 		}
 
-		if !s.Ready {
-			return nil
-		}
+		if s.Ready && s.Strategy != nil {
+			if err := s.Strategy.Handle(BarsOpcode, barsData); err != nil {
+				if errors.Is(err, ErrNoAvailableHandler) {
+					// log.Println(fmt.Errorf("%w for Opcode: %s", err, BarsOpcode))
+					return nil
+				}
 
-		handler, ok := s.Handlers[BarsOpcode]
-		if !ok {
-			return nil
-		}
-
-		if err := handler.Handle(barsData, s.DataProcessor, 0, 0); err != nil {
-			return err
+				return err
+			}
 		}
 	case AllTradesOpcode:
 		var allTradesData AllTradesSlimData
@@ -281,17 +303,15 @@ func (s *Subscriber) HandleEventSync(event *ChainEvent) error {
 			return err
 		}
 
-		if !s.Ready {
-			return nil
-		}
+		if s.Ready && s.Strategy != nil {
+			if err := s.Strategy.Handle(AllTradesOpcode, allTradesData); err != nil {
+				if errors.Is(err, ErrNoAvailableHandler) {
+					// log.Println(fmt.Errorf("%w for Opcode: %s", err, AllTradesOpcode))
+					return nil
+				}
 
-		handler, ok := s.Handlers[AllTradesOpcode]
-		if !ok {
-			return nil
-		}
-
-		if err := handler.Handle(allTradesData, s.DataProcessor, 0, 0); err != nil {
-			return err
+				return err
+			}
 		}
 	case OrderBookOpcode:
 		var orderBookData OrderBookSlimData
@@ -304,17 +324,15 @@ func (s *Subscriber) HandleEventSync(event *ChainEvent) error {
 			return err
 		}
 
-		if !s.Ready {
-			return nil
-		}
+		if s.Ready && s.Strategy != nil {
+			if err := s.Strategy.Handle(OrderBookOpcode, orderBookData); err != nil {
+				if errors.Is(err, ErrNoAvailableHandler) {
+					// log.Println(fmt.Errorf("%w for Opcode: %s", err, OrderBookOpcode))
+					return nil
+				}
 
-		handler, ok := s.Handlers[OrderBookOpcode]
-		if !ok {
-			return nil
-		}
-
-		if err := handler.Handle(orderBookData, s.DataProcessor, 0, 0); err != nil {
-			return err
+				return err
+			}
 		}
 	}
 
@@ -322,23 +340,23 @@ func (s *Subscriber) HandleEventSync(event *ChainEvent) error {
 	return nil
 }
 
-func (s *Subscriber) SetStrategy(opcode Opcode, handler Strategy) {
-	handler.SetDataProcessor(s.DataProcessor)
-	handler.SetStorage(s.Storage)
-	s.Handlers[opcode] = handler
+func (s *Subscriber) SetStrategy(strategy Strategy) {
+	strategy.SetDataProcessor(s.DataProcessor)
+	strategy.SetStorage(s.Storage)
+	s.Strategy = strategy
 }
 
 func (s *Subscriber) SetID(id uuid.UUID) {
 	s.ID = SubscriberID(id)
 }
 
-// SetReady Выставляет флаг готовности стратегии к торговле
-func (s *Subscriber) SetReady() {
+// setReady Выставляет флаг готовности стратегии к торговле
+func (s *Subscriber) setReady() {
 	s.Ready = true
 }
 
-// SetDone Выставляет флаг завершения работы
-func (s *Subscriber) SetDone() {
+// setDone Выставляет флаг завершения работы
+func (s *Subscriber) setDone() {
 	s.Done = true
 }
 

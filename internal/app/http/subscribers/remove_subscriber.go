@@ -3,14 +3,14 @@ package subscribers
 import (
 	"encoding/json"
 	"github.com/MarlyasDad/rd-hub-go/internal/app/http/responses"
+	"github.com/MarlyasDad/rd-hub-go/pkg/alor"
 	"github.com/go-playground/validator/v10"
-	"github.com/google/uuid"
 	"net/http"
 )
 
 type (
 	removeSubscriberCommand interface {
-		RemoveSubscriber(uuid.UUID) error
+		RemoveSubscriber(id alor.SubscriberID) error
 	}
 
 	RemoveSubscriberHandler struct {
@@ -19,7 +19,7 @@ type (
 	}
 
 	removeSubscriberRequest struct {
-		ID uuid.UUID `json:"id"`
+		ID alor.SubscriberID `json:"id"`
 	}
 
 	//GetSubscribersListResponse struct {
@@ -65,9 +65,7 @@ func (h *RemoveSubscriberHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// bodyBytes, _ := json.Marshal(subscriberID)
-
-	responses.GetSuccessResponse(w)
+	responses.GetSuccessResponse(w, nil)
 }
 
 func (h *RemoveSubscriberHandler) getRequestData(r *http.Request) (requestData *removeSubscriberRequest, err error) {

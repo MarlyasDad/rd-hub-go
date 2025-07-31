@@ -9,91 +9,61 @@ import (
 	"time"
 )
 
-// {
-//    "description": "Если нужно описание, то оно должно быть туть",
-//    // Параметры инструмента
-//    "instrument": {
-//        "exchange": "MOEX",
-//        "code": "UWGN",
-//        "board": "TQBR",
-//        "timeframe": 300
-//    },
-//    // Параметры стратегии
-//    "strategy": {
-//        // Название стратегии, которую мы хотим использовать
-//        // "strategy_name": "blank_strategy",
-//        // "strategy_name": "proxy_strategy",
-//        "name": "trailing_stop",
-//        // Индивидуальные параметры стратегии (опционально, для каждой стратегии свои)
-//        "settings": {
-//            "close_under": 123.00,
-//            "close_above": 456.00,
-//            "slippage": 10,
-//            "side": "buy",
-//            "volume": 50
-//        },
-//        // Детализация данных (опционально, если не указано, то значения по-умолчанию)
-//        "withDelta": true,
-//        "withMarketProfile": true,
-//        "withOrderBookProfile": true,
-//        // Параметры подписок (опционально, если не указано, то значения по-умолчанию)
-//        "subscriptions": {
-//            "allTradesParams": {
-//                "depth": 0,
-//                "includeVirtualtrades": false
-//            },
-//            "orderBookParams": {
-//                "depth": 10
-//            },
-//            "barsParams": {
-//                "skipHitory": false,
-//                "splitAdjust": true
-//            }
-//        },
-//        // Индикаторы (опционально, если не указано, то не считаются)
-//        "indicators": [
-//            {
-//                // Название индикатора, который мы хотим использовать
-//                "name": "EMA",
-//                // Индивидуальные параметры индикатора (опционально, для каждого индикатора свои)
-//                "params": {
-//                    "period": 42
-//                }
-//            }
-//        ],
-//        "async": false
-//    }
-//}
-
 type AddSubscriberParams struct {
-	Description string
-	Instrument  InstrumentParams `json:"instrument"`
-	Strategy    StrategyParams   `json:"strategy"`
-	Async       bool             `json:"async"`
+	Description   string        `json:"description"`
+	Instrument    Instrument    `json:"instrument"`
+	Strategy      Strategy      `json:"strategy"`
+	Subscriptions Subscriptions `json:"subscriptions"`
+	Indicators    []Indicator   `json:"indicators"`
+	Async         bool          `json:"async"`
 }
 
-type InstrumentParams struct {
-	Exchange  string
-	Code      string
-	Board     string
-	Timeframe int64
+type Instrument struct {
+	Exchange  string `json:"exchange"`
+	Code      string `json:"code"`
+	Board     string `json:"board"`
+	Timeframe int64  `json:"timeframe"`
 }
 
-type StrategyParams struct {
-	Name              string          `json:"name"`
-	Settings          json.RawMessage `json:"settings"`
-	WithDelta         bool            `json:"with_delta"`
-	WithMarketProfile bool            `json:"with_market_profile"`
-	WithOrderFlow     bool            `json:"with_order_flow"`
+type Strategy struct {
+	Name                 string          `json:"name"`
+	Settings             json.RawMessage `json:"settings"`
+	WithDelta            bool            `json:"withDelta"`
+	WithMarketProfile    bool            `json:"withMarketProfile"`
+	WithOrderBookProfile bool            `json:"withOrderBookProfile"`
 }
 
-type SubscriptionsParams struct {
+type Subscriptions struct {
+	AllTrades *AllTradesParams `json:"allTrades"`
+	OrderBook *OrderBookParams `json:"orderBook"`
+	Bars      *BarsParams      `json:"bars"`
 }
 
-func (s Service) AddSubscriber(ctx context.Context, params AddSubscriberParams) (alor.SubscriberID, error) { // FromAlltrades
+type AllTradesParams struct {
+	Frequency            int  `json:"frequency"`
+	Depth                int  `json:"depth"`
+	IncludeVirtualTrades bool `json:"includeVirtualTrades"`
+}
+
+type OrderBookParams struct {
+	Frequency int `json:"frequency"`
+	Depth     int `json:"depth"`
+}
+
+type BarsParams struct {
+	Frequency   int   `json:"frequency"`
+	From        int64 `json:"from"`
+	SkipHistory bool  `json:"skipHistory"`
+	SplitAdjust bool  `json:"splitAdjust"`
+}
+
+type Indicator struct {
+	Name     string          `json:"name"`
+	Settings json.RawMessage `json:"settings"`
+}
+
+func (s Service) AddSubscriber(ctx context.Context, params *AddSubscriberParams) (alor.SubscriberID, error) {
 	var options []alor.SubscriberOption
-
-	// params
 
 	if params.Strategy.WithDelta {
 		options = append(options, alor.WithDelta())
@@ -103,27 +73,41 @@ func (s Service) AddSubscriber(ctx context.Context, params AddSubscriberParams) 
 		options = append(options, alor.WithMarketProfile())
 	}
 
-	if params.Strategy.WithOrderFlow {
+	if params.Strategy.WithOrderBookProfile {
 		options = append(options, alor.WithOrderBookProfile())
 	}
 
-	options = append(options, alor.WithAllTradesSubscription(0, 50, false))
-	options = append(options, alor.WithOrderBookSubscription(0, 10))
-	// options = append(options, alor.WithCustomHandler(testHandler))
+	if params.Subscriptions.AllTrades != nil {
+		options = append(options, alor.WithAllTradesSubscription(params.Subscriptions.AllTrades.Frequency, 50, false))
+	}
 
-	// Подписчик создаётся с ready = false. Все новые события начинают накапливаться в очереди
-	testSubscriber := alor.NewSubscriber(
+	if params.Subscriptions.OrderBook != nil {
+		options = append(options, alor.WithOrderBookSubscription(params.Subscriptions.OrderBook.Frequency, 10))
+	}
+
+	if params.Subscriptions.Bars != nil {
+		options = append(options, alor.WithBarsSubscription(params.Subscriptions.Bars.Frequency, 10, params.Subscriptions.Bars.SkipHistory, params.Subscriptions.Bars.SplitAdjust))
+	}
+
+	subscriber := alor.NewSubscriber(
 		params.Description,
 		alor.Exchange(params.Instrument.Exchange),
 		params.Instrument.Code,
 		params.Instrument.Board,
 		alor.Timeframe(params.Instrument.Timeframe),
-		false,
+		params.Async,
 		options...,
 	)
-	//if err != nil {
-	//	return uuid.Nil, err
-	//}
+
+	strategy, err := alor.NewStrategy(params.Strategy.Name, params.Strategy.Settings)
+	if err != nil {
+		return alor.SubscriberID{}, err
+	}
+
+	subscriber.SetStrategy(strategy)
+
+	// TODO: Add indicators
+	// for ...
 
 	// GET данные прошлых сессий
 	// Отправляем все данные в подписчика ====>
@@ -144,23 +128,24 @@ func (s Service) AddSubscriber(ctx context.Context, params AddSubscriberParams) 
 
 	// Получаем данные от брокера <====
 	for {
-		log.Println("get data for ", testSubscriber.ID, " offset ", historyParams.Offset)
+		// TODO: GET *ChainEvent
+		log.Println("get data for ", subscriber.ID, " offset ", historyParams.Offset)
 		events, err := s.brokerClient.GetAllTrades(historyParams)
 		if err != nil {
-			return testSubscriber.ID, err
+			return subscriber.ID, err
 		}
 
 		if len(events) == 0 {
 			break
 		}
 
-		log.Println(len(events), "got events from", testSubscriber.ID, " offset ", historyParams.Offset)
+		log.Println(len(events), "got events from", subscriber.ID, " offset ", historyParams.Offset)
 
 		// Отправляем все данные в подписчика ====>
 		for _, event := range events {
 			// TODO: HANDLE UNIVESAL
-			if err := testSubscriber.HandleHistoryAlltrades(event); err != nil {
-				return testSubscriber.ID, err
+			if err := subscriber.HandleHistoryAlltrades(event); err != nil {
+				return subscriber.ID, err
 
 			}
 		}
@@ -169,19 +154,14 @@ func (s Service) AddSubscriber(ctx context.Context, params AddSubscriberParams) 
 
 		historyParams.Offset += 10000
 	}
-	log.Println("get data for ", testSubscriber.ID, " finished")
+	log.Println("get data for ", subscriber.ID, " finished")
 
-	// Активируем стратегии
-	testSubscriber.SetReady()
-	log.Printf("subscriber %s ready to work", testSubscriber.ID)
-
-	// TODO: Получаем с захлёстом в 50 событий
 	// Начинаем получать новые события
-	if err := s.brokerClient.AddSubscriber(testSubscriber); err != nil {
+	if err := s.brokerClient.AddSubscriber(subscriber); err != nil {
 		return alor.SubscriberID(uuid.Nil), err
 	}
 
-	log.Printf("subscriber %s successfully added", testSubscriber.ID)
+	log.Printf("subscriber %s successfully added", subscriber.ID)
 
-	return testSubscriber.ID, nil
+	return subscriber.ID, nil
 }

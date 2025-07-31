@@ -15,7 +15,7 @@ const (
 type ChainEvent struct {
 	Type   EventType
 	Opcode Opcode
-	Guid   string
+	Guid   GUID
 	Data   json.RawMessage
 	Next   *ChainEvent
 }

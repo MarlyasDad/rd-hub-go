@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 	"github.com/MarlyasDad/rd-hub-go/internal/app/http/responses"
 	"github.com/MarlyasDad/rd-hub-go/internal/services/http/subscribers"
+	"github.com/MarlyasDad/rd-hub-go/pkg/alor"
 	"github.com/go-playground/validator/v10"
-	"github.com/google/uuid"
 	"net/http"
 )
 
 type (
 	addSubscriberCommand interface {
-		AddSubscriber(ctx context.Context, params subscribers.AddSubscriberParams) (uuid.UUID, error)
+		AddSubscriber(ctx context.Context, params *subscribers.AddSubscriberParams) (alor.SubscriberID, error)
 	}
 
 	AddSubscriberHandler struct {
@@ -21,36 +21,56 @@ type (
 	}
 
 	addSubscriberRequest struct {
-		Description   string               `json:"description" validate:"required"`
-		Exchange      string               `json:"exchange" validate:"oneof=MOEX SPBX"`
-		Code          string               `json:"code" validate:"required"`
-		Board         string               `json:"board" validate:"required"`
-		Timeframe     int64                `json:"timeframe"`
-		Subscriptions requestSubscriptions `json:"subscriptions"`
-		From          int64                `json:"from"` // Запрос истории с этой даты
+		Description   string        `json:"description"`
+		Instrument    Instrument    `json:"instrument"`
+		Strategy      Strategy      `json:"strategy"`
+		Subscriptions Subscriptions `json:"subscriptions"`
+		Indicators    []Indicator   `json:"indicators"`
+		Async         bool          `json:"async"`
 	}
 
-	requestSubscriptions struct {
-		AllTrades requestAllTrades `json:"allTrades"`
-		OrderBook requestOrderBook `json:"orderBook"`
-		Bars      requestBars      `json:"bars"`
+	Instrument struct {
+		Exchange  string `json:"exchange"`
+		Code      string `json:"code"`
+		Board     string `json:"board"`
+		Timeframe int64  `json:"timeframe"`
 	}
 
-	requestAllTrades struct {
-		WithDelta            bool  `json:"withDelta"`
-		WithMarketProfile    bool  `json:"withMarketProfile"`
-		Depth                int64 `json:"depth"` // для захлёста истории во избежание потери данных
-		IncludeVirtualTrades bool  `json:"includeVirtualTrades"`
+	Strategy struct {
+		Name                 string          `json:"name"`
+		Settings             json.RawMessage `json:"settings"`
+		WithDelta            bool            `json:"withDelta"`
+		WithMarketProfile    bool            `json:"withMarketProfile"`
+		WithOrderBookProfile bool            `json:"withOrderBookProfile"`
 	}
 
-	requestOrderBook struct {
-		WithOrderFlow bool  `json:"withOrderFlow"`
-		Depth         int64 `json:"depth"` // глубина стакана в одну сторону
+	Subscriptions struct {
+		AllTrades *AllTradesParams `json:"allTrades"`
+		OrderBook *OrderBookParams `json:"orderBook"`
+		Bars      *BarsParams      `json:"bars"`
 	}
 
-	requestBars struct {
-		WithOrderFlow bool  `json:"withOrderFlow"`
-		Depth         int64 `json:"depth"` // глубина стакана в одну сторону
+	AllTradesParams struct {
+		Frequency            int  `json:"frequency"`
+		Depth                int  `json:"depth"`
+		IncludeVirtualTrades bool `json:"includeVirtualTrades"`
+	}
+
+	OrderBookParams struct {
+		Frequency int `json:"frequency"`
+		Depth     int `json:"depth"`
+	}
+
+	BarsParams struct {
+		Frequency   int   `json:"frequency"`
+		From        int64 `json:"from"`
+		SkipHistory bool  `json:"skipHistory"`
+		SplitAdjust bool  `json:"splitAdjust"`
+	}
+
+	Indicator struct {
+		Name     string          `json:"name"`
+		Settings json.RawMessage `json:"settings"`
 	}
 )
 
@@ -64,7 +84,7 @@ func NewAddSubscriberHandler(command addSubscriberCommand, name string) *AddSubs
 func (h *AddSubscriberHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var (
 		ctx         = r.Context()
-		requestData *addSubscriberRequest
+		requestData *subscribers.AddSubscriberParams
 		err         error
 	)
 
@@ -73,23 +93,9 @@ func (h *AddSubscriberHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Унифицировать параметры, которые отвечают за подписки
-	// если есть дельта, то обязательно должна быть подписка на обезличенные сделки
-	// если есть стакан -> обязательная подписка на стакан
-	// Сделать сабскрибера интерфейсом
-	// Проверить подписки, если есть профиль или дельта, удалить подписку на свечи если существует
-	params := subscribers.AddSubscriberParams{
-		Description:       requestData.Description,
-		Exchange:          requestData.Exchange,
-		Code:              requestData.Code,
-		Board:             requestData.Board,
-		Timeframe:         requestData.Timeframe,
-		WithDelta:         true, // сразу подписаться если не подписан, указать параметры
-		WithMarketProfile: true, // сразу подписаться если не подписан, указать параметры
-		WithOrderFlow:     true, // сразу подписаться если не подписан, указать параметры
-	}
+	// добавляем подписчика
 
-	subscriberID, err := h.addSubscriberCommand.AddSubscriber(ctx, params)
+	subscriberID, err := h.addSubscriberCommand.AddSubscriber(ctx, requestData)
 	if err != nil {
 		responses.GetErrorResponse(w, h.name, err, http.StatusInternalServerError)
 		return
@@ -97,18 +103,18 @@ func (h *AddSubscriberHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 
 	bodyBytes, _ := json.Marshal(subscriberID)
 
-	responses.GetSuccessResponseWithBody(w, bodyBytes)
+	responses.GetSuccessResponse(w, bodyBytes)
 }
 
-func (h *AddSubscriberHandler) getRequestData(r *http.Request) (requestData *addSubscriberRequest, err error) {
-	requestData = &addSubscriberRequest{}
+func (h *AddSubscriberHandler) getRequestData(r *http.Request) (requestData *subscribers.AddSubscriberParams, err error) {
+	requestData = &subscribers.AddSubscriberParams{}
 
 	err = json.NewDecoder(r.Body).Decode(requestData)
 
 	return
 }
 
-func (h *AddSubscriberHandler) validateRequestData(requestData *addSubscriberRequest) error {
+func (h *AddSubscriberHandler) validateRequestData(requestData *subscribers.AddSubscriberParams) error {
 	return validator.New().Struct(requestData)
 
 	// write your custom validating logic here

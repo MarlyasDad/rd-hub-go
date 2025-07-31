@@ -2,12 +2,11 @@ package alor
 
 import (
 	"errors"
-	"fmt"
 	"time"
 )
 
 type DataDetailing struct {
-	delta, marketProfile, orderBookProfile, disableBars bool
+	delta, marketProfile, orderBookProfile bool
 }
 
 func NewDataProcessor(timeframe Timeframe) *DataProcessor {
@@ -36,10 +35,6 @@ func (p *DataProcessor) GetLastBar() (*Bar, error) {
 }
 
 func (p *DataProcessor) NewAllTrades(data AllTradesSlimData) error {
-	if !p.detailing.disableBars {
-		return nil
-	}
-
 	if data.ID < p.lastAlltradesID {
 		return nil
 	} else {
@@ -60,6 +55,8 @@ func (p *DataProcessor) NewAllTrades(data AllTradesSlimData) error {
 		}
 
 		p.lastBar = newBar
+
+		return nil
 	}
 
 	// Заполняем текущий бар
@@ -105,6 +102,15 @@ func (p *DataProcessor) NewBarFromAllTradesData(eventBarTime time.Time, data All
 		},
 	}
 
+	// Считаем дополнительные данные
+	if p.detailing.delta {
+		newBar.Delta.AddValue(data.Qty, data.Side)
+	}
+
+	if p.detailing.marketProfile {
+		newBar.MarketProfile.AddValue(data.Price, data.Qty, data.Side)
+	}
+
 	return newBar
 }
 
@@ -134,6 +140,7 @@ func (p *DataProcessor) NewOrderBook(data OrderBookSlimData) error {
 	// Дата приходит в UnixMilli
 	orderBookTime := time.UnixMilli(data.MsTimestamp - (data.MsTimestamp % int64(p.timeframe*1000)))
 
+	// log.Println(p.lastBar.Time, orderBookTime, p.lastBar.Time != orderBookTime)
 	// Если свечи нет или стакан не от этой свечи, то пропускаем
 	if p.lastBar == nil || p.lastBar.Time != orderBookTime {
 		return nil
@@ -147,17 +154,22 @@ func (p *DataProcessor) NewOrderBook(data OrderBookSlimData) error {
 }
 
 func (p *DataProcessor) NewBar(data BarsSlimData) error {
-	if p.detailing.disableBars {
+	if p.lastBar != nil && data.Time < p.lastBar.Timestamp {
 		return nil
 	}
 
 	eventBarTime := time.Unix(data.Time-(data.Time%int64(p.timeframe)), 0)
 
-	fmt.Println("New bart", eventBarTime.String())
+	// fmt.Println("New bar", data.Time)
 
-	if eventBarTime != p.lastBar.Time {
+	if p.lastBar == nil || p.lastBar.Time != eventBarTime {
 		newBar := p.NewBarFromBarData(eventBarTime, data)
-		_ = p.bars.Enqueue(newBar)
+
+		err := p.bars.Enqueue(newBar)
+		if err != nil {
+			return err
+		}
+
 		p.lastBar = newBar
 
 		return nil
@@ -170,7 +182,7 @@ func (p *DataProcessor) NewBar(data BarsSlimData) error {
 
 func (p *DataProcessor) NewBarFromBarData(eventBarTime time.Time, data BarsSlimData) *Bar {
 	newBar := &Bar{
-		Timestamp: eventBarTime.Unix(),
+		Timestamp: data.Time,
 		Time:      eventBarTime,
 		Open:      data.Open,
 		High:      data.High,

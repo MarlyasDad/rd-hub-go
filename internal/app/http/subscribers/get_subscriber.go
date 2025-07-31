@@ -11,7 +11,7 @@ import (
 
 type (
 	getSubscriberCommand interface {
-		GetSubscriber(subscriberID uuid.UUID) (*alor.Subscriber, error)
+		GetSubscriber(subscriberID alor.SubscriberID) (*alor.Subscriber, error)
 	}
 
 	GetSubscriberHandler struct {
@@ -20,7 +20,7 @@ type (
 	}
 
 	GetSubscriberRequest struct {
-		SubscriberID uuid.UUID `json:"subscriber_id"`
+		SubscriberID alor.SubscriberID `json:"subscriber_id"`
 	}
 )
 
@@ -54,7 +54,7 @@ func (h *GetSubscriberHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	responses.GetSuccessResponseWithBody(w, subscribersJson)
+	responses.GetSuccessResponse(w, subscribersJson)
 }
 
 func (h *GetSubscriberHandler) getRequestData(r *http.Request) (requestData *GetSubscriberRequest, err error) {
@@ -65,7 +65,7 @@ func (h *GetSubscriberHandler) getRequestData(r *http.Request) (requestData *Get
 		return
 	}
 
-	requestData.SubscriberID = subscriberID
+	requestData.SubscriberID = alor.SubscriberID(subscriberID)
 
 	return
 }

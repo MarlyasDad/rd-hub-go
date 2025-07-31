@@ -17,7 +17,7 @@ type (
 	GUID string
 
 	SubscriptionContainer struct {
-		Subscription Subscription
+		Subscription *Subscription
 		Active       bool
 		Items        map[SubscriberID]bool
 		//Items        map[SubscriberID]*Subscriber
@@ -37,7 +37,7 @@ func (s *Subscriptions) Add(subscriberID SubscriberID, subscription *Subscriptio
 	defer s.mu.Unlock()
 
 	container := SubscriptionContainer{
-		Subscription: *subscription,
+		Subscription: subscription,
 		Active:       false,
 		Items: map[SubscriberID]bool{
 			subscriberID: true,
@@ -45,6 +45,15 @@ func (s *Subscriptions) Add(subscriberID SubscriberID, subscription *Subscriptio
 	}
 
 	s.toAdd[GUID(subscription.GUID)] = container
+}
+
+func (s *Subscriptions) SetActive(guid GUID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	subscriptionContainer := s.list[guid]
+	subscriptionContainer.Active = true
+	s.list[guid] = subscriptionContainer
 }
 
 func (s *Subscriptions) Delete(subscriberID SubscriberID, guid GUID) error {
@@ -68,7 +77,7 @@ func (s *Subscriptions) Delete(subscriberID SubscriberID, guid GUID) error {
 	return nil
 }
 
-func (s *Subscriptions) GetContainer(guid GUID) (SubscriptionContainer, error) {
+func (s *Subscriptions) Get(guid GUID) (SubscriptionContainer, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -80,7 +89,7 @@ func (s *Subscriptions) GetContainer(guid GUID) (SubscriptionContainer, error) {
 	return subscriptionContainer, nil
 }
 
-func (s *Subscriptions) GetAllContainers() (map[GUID]SubscriptionContainer, error) {
+func (s *Subscriptions) All() (map[GUID]SubscriptionContainer, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

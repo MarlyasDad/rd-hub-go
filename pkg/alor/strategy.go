@@ -1,21 +1,38 @@
 package alor
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 )
 
-// !!! интерфейс для dataProcessor, commandBus и messageBus
 type Strategy interface {
-	Handle(data interface{}, processor *DataProcessor, commandBus int64, messageBus int64) error
+	Handle(opcode Opcode, data interface{}) error
 	SetDataProcessor(processor *DataProcessor)
 	SetStorage(storage *Storage)
 }
 
+func NewStrategy(name string, settings json.RawMessage) (Strategy, error) {
+	if name != "" {
+		name = "base"
+	}
+
+	switch strings.ToLower(name) {
+	case "base":
+		return &BaseStrategy{}, nil
+	default:
+		return nil, fmt.Errorf("unknown strategy: %s", name)
+	}
+}
+
+// !!! интерфейс для dataProcessor, commandBus и messageBus
 type BaseStrategy struct {
 	Storage    *Storage
 	Processor  *DataProcessor
 	CommandBus int64
 	MessageBus int64
+	Handlers   map[Opcode]func(opcode Opcode, data interface{}, processor *DataProcessor, storage *Storage, commandBus, messageBus int64) error
 }
 
 func (s *BaseStrategy) SetDataProcessor(processor *DataProcessor) {
@@ -24,6 +41,15 @@ func (s *BaseStrategy) SetDataProcessor(processor *DataProcessor) {
 
 func (s *BaseStrategy) SetStorage(storage *Storage) {
 	s.Storage = storage
+}
+
+func (s *BaseStrategy) Handle(opcode Opcode, data interface{}) error {
+	_, ok := s.Handlers[opcode]
+	if !ok {
+		return ErrNoAvailableHandler
+	}
+
+	return s.Handlers[opcode](opcode, data, s.Processor, s.Storage, s.CommandBus, s.MessageBus)
 }
 
 type OrderBookStrategy struct {

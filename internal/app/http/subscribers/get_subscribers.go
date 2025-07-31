@@ -51,5 +51,5 @@ func (h *GetSubscribersListHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	responses.GetSuccessResponseWithBody(w, subscribersJson)
+	responses.GetSuccessResponse(w, subscribersJson)
 }

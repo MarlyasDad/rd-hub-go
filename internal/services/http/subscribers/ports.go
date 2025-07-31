@@ -2,14 +2,13 @@ package subscribers
 
 import (
 	"github.com/MarlyasDad/rd-hub-go/pkg/alor"
-	"github.com/google/uuid"
 )
 
 type brokerClient interface {
 	GetSubscribers() []*alor.Subscriber
-	GetAllSubscriberBars(subscriberID uuid.UUID) ([]*alor.Bar, error)
+	GetAllSubscriberBars(subscriberID alor.SubscriberID) ([]*alor.Bar, error)
 	AddSubscriber(subscriber *alor.Subscriber) error
-	RemoveSubscriber(subscriberID uuid.UUID) error
+	RemoveSubscriber(subscriberID alor.SubscriberID) error
 	GetAllTrades(params alor.GetAllTradesV2Params) ([]alor.AllTradesSlimData, error)
-	GetSubscriber(subscriberID uuid.UUID) (*alor.Subscriber, error)
+	GetSubscriber(subscriberID alor.SubscriberID) (*alor.Subscriber, error)
 }

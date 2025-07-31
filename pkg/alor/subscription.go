@@ -5,7 +5,7 @@ import (
 )
 
 type Subscription struct {
-	GUID            string          // Идентификатор подписки
+	GUID            GUID            // Идентификатор подписки
 	Opcode          Opcode          // Код подписки
 	Exchange        Exchange        // Биржа MOEX SPBX
 	Code            string          // Тикер (Код финансового инструмента)
@@ -104,10 +104,10 @@ type OrderBookRequest struct {
 	Format    ResponseFormat `json:"format"`              // Формат представления возвращаемых данных
 	Frequency int            `json:"frequency,omitempty"` // Частота (интервал) передачи данных сервером. Сервер вернёт последние данные по запросу за тот временной интервал, который указан в качестве значения параметра. Пример: биржа передаёт данные каждые 2 мс, но, при значении параметра 10 мс, сервер вернёт только последнее значение, отбросив предыдущие.
 	Opcode    Opcode         `json:"opcode"`              // Код выполняемой операции
-	Guid      string         `json:"guid"`                // Не более 50 символов. Уникальный идентификатор сообщений создаваемой подписки. Все входящие сообщения, соответствующие этой подписке, будут иметь такое значение поля guid
+	Guid      GUID           `json:"guid"`                // Не более 50 символов. Уникальный идентификатор сообщений создаваемой подписки. Все входящие сообщения, соответствующие этой подписке, будут иметь такое значение поля guid
 }
 
-func (ws *Websocket) OrderBooksSubscribe(token Token, subscription *Subscription) ([]byte, error) {
+func (ws *Websocket) prepareOrderBooksRequest(token Token, subscription *Subscription) ([]byte, error) {
 	accessToken, err := token.GetAccessToken()
 	if err != nil {
 		return nil, err
@@ -178,11 +178,11 @@ type AllTradesRequest struct {
 	InstrumentGroup      string         `json:"instrumentGroup"`      // Код режима торгов (Борд). Для Биржи СПБ всегда SPBX
 	Format               ResponseFormat `json:"format"`               // Формат представления возвращаемых данных
 	Frequency            int            `json:"frequency,omitempty"`  // Частота (интервал) передачи данных сервером. Сервер вернёт последние данные по запросу за тот временной интервал, который указан в качестве значения параметра. Пример: биржа передаёт данные каждые 2 мс, но, при значении параметра 10 мс, сервер вернёт только последнее значение, отбросив предыдущие.
-	Guid                 string         `json:"guid"`                 // Не более 50 символов. Уникальный идентификатор сообщений создаваемой подписки. Все входящие сообщения, соответствующие этой подписке, будут иметь такое значение поля guid
+	Guid                 GUID           `json:"guid"`                 // Не более 50 символов. Уникальный идентификатор сообщений создаваемой подписки. Все входящие сообщения, соответствующие этой подписке, будут иметь такое значение поля guid
 	Token                string         `json:"token"`                // Access Токен для авторизации запроса
 }
 
-func (ws *Websocket) AllTradesSubscribe(token Token, subscription *Subscription) ([]byte, error) {
+func (ws *Websocket) prepareAllTradesRequest(token Token, subscription *Subscription) ([]byte, error) {
 	accessToken, err := token.GetAccessToken()
 	if err != nil {
 		return nil, err
@@ -253,11 +253,11 @@ type BarsRequest struct {
 	InstrumentGroup string         `json:"instrumentGroup"`     // Код режима торгов (Борд). Для Биржи СПБ всегда SPBX
 	Format          ResponseFormat `json:"format"`              // Формат представления возвращаемых данных
 	Frequency       int            `json:"frequency,omitempty"` // Частота (интервал) передачи данных сервером. Сервер вернёт последние данные по запросу за тот временной интервал, который указан в качестве значения параметра. Пример: биржа передаёт данные каждые 2 мс, но, при значении параметра 10 мс, сервер вернёт только последнее значение, отбросив предыдущие.
-	Guid            string         `json:"guid"`                // Не более 50 символов. Уникальный идентификатор сообщений создаваемой подписки. Все входящие сообщения, соответствующие этой подписке, будут иметь такое значение поля guid
+	Guid            GUID           `json:"guid"`                // Не более 50 символов. Уникальный идентификатор сообщений создаваемой подписки. Все входящие сообщения, соответствующие этой подписке, будут иметь такое значение поля guid
 	Token           string         `json:"token"`               // Access Токен для авторизации запроса
 }
 
-func (ws *Websocket) BarsSubscribe(token Token, subscription *Subscription) ([]byte, error) {
+func (ws *Websocket) prepareBarsRequest(token Token, subscription *Subscription) ([]byte, error) {
 	accessToken, err := token.GetAccessToken()
 	if err != nil {
 		return nil, err

@@ -1,7 +1,6 @@
 package alor
 
 import (
-	"errors"
 	"sync"
 )
 
@@ -27,6 +26,20 @@ func (s *Subscribers) Add(subscriber *Subscriber) {
 	s.toAdd[subscriber.ID] = subscriber
 }
 
+func (s *Subscribers) SetDone(subscriberID SubscriberID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.list[subscriberID].setDone()
+}
+
+func (s *Subscribers) SetReady(subscriberID SubscriberID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.list[subscriberID].setDone()
+}
+
 func (s *Subscribers) Delete(subscriberID SubscriberID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -40,7 +53,7 @@ func (s *Subscribers) Get(subscriberID SubscriberID) (*Subscriber, error) {
 
 	subscriber, ok := s.list[subscriberID]
 	if !ok {
-		return nil, errors.New("subscriber not found")
+		return nil, ErrSubscriberNotFound
 	}
 
 	return subscriber, nil

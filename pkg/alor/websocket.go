@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"log"
 	"strings"
@@ -139,13 +138,12 @@ func (ws *Websocket) Subscribe(token Token, subscriberID SubscriberID, subscript
 		return err
 	}
 
+	log.Printf("Запросили подписку на %+v", subscription)
+
 	// отправляем в сокет
 	if err := ws.Send(requestBytes); err != nil {
 		return err
 	}
-
-	// Добавляем подписку в пул
-	ws.subscriptions.Add(subscriberID, subscription)
 
 	return nil
 }
@@ -159,10 +157,6 @@ func (ws *Websocket) Unsubscribe(token string, subscriberID SubscriberID, guid G
 
 	requestBytes, err := json.Marshal(request)
 	if err != nil {
-		return err
-	}
-
-	if err := ws.subscriptions.Delete(subscriberID, guid); err != nil {
 		return err
 	}
 
@@ -242,6 +236,7 @@ func (ws *Websocket) Listen() {
 				}
 				return
 			}
+
 			// log.Printf("Получено: %s", message)
 
 			// обрабатываем сообщение
@@ -252,9 +247,11 @@ func (ws *Websocket) Listen() {
 				return
 			}
 
+			// log.Printf("Получено: %+v", response)
+
 			err = ws.HandleResponse(response)
 			if err != nil {
-				log.Println("error in handle:", err)
+				log.Println("ws handle response error:", err)
 				return
 			}
 		}
@@ -274,16 +271,16 @@ func (ws *Websocket) HandleResponse(message WsResponse) error {
 	// отделяем системные сообщения от данных
 	if message.RequestGuid != "" {
 		event.Type = SystemType
-		event.Guid = message.RequestGuid
+		event.Guid = GUID(message.RequestGuid)
 	}
 
 	if message.Guid != "" {
 		event.Type = DataType
-		event.Guid = message.Guid
+		event.Guid = GUID(message.Guid)
 	}
 
-	guidParts := strings.Split(event.Guid, "-")
-	event.Opcode = Opcode(guidParts[3])
+	guidParts := strings.Split(string(event.Guid), "-")
+	event.Opcode = Opcode(guidParts[0])
 
 	err := ws.queue.Enqueue(event)
 	if err != nil {
@@ -370,8 +367,16 @@ func (ws *Websocket) ReconnectHandler(ctx context.Context, token Token) {
 }
 
 func (ws *Websocket) restoreSubscriptions(token Token) error {
-	for _, subscriptionState := range ws.subscriptions.All() {
+	log.Println("restoring subscriptions")
+
+	containers, err := ws.subscriptions.All()
+	if err != nil {
+		return err
+	}
+
+	for _, subscriptionState := range containers {
 		requestBytes, err := ws.prepareRequest(token, subscriptionState.Subscription)
+		log.Println(string(requestBytes))
 		if err != nil {
 			return err
 		}
@@ -387,11 +392,11 @@ func (ws *Websocket) restoreSubscriptions(token Token) error {
 func (ws *Websocket) prepareRequest(token Token, subscription *Subscription) ([]byte, error) {
 	switch subscription.Opcode {
 	case BarsOpcode:
-		return ws.BarsSubscribe(token, subscription)
+		return ws.prepareBarsRequest(token, subscription)
 	case AllTradesOpcode:
-		return ws.AllTradesSubscribe(token, subscription)
+		return ws.prepareAllTradesRequest(token, subscription)
 	case OrderBookOpcode:
-		return ws.OrderBooksSubscribe(token, subscription)
+		return ws.prepareOrderBooksRequest(token, subscription)
 	}
 
 	return nil, errors.New("invalid opcode")
@@ -405,12 +410,17 @@ func (ws *Websocket) SortQueue(ctx context.Context, token Token) {
 	defer ws.wg.Done()
 
 	for {
+		// Каждую итерацию добавляем и удаляем подписчиков и подписки
+		ws.subscriptions.Rebalancing()
+		ws.subscribers.Rebalancing()
+
 		select {
 		case <-ctx.Done():
 			return // завершаем когда сервер остановлен
 		case <-ws.done:
 			return // завершаем когда нажали close
 		default:
+			// log.Println("length dequeue", ws.queue.GetLength())
 			event, err := ws.queue.Dequeue()
 			if err != nil {
 				if errors.Is(err, ErrQueueUnderFlow) {
@@ -422,23 +432,43 @@ func (ws *Websocket) SortQueue(ctx context.Context, token Token) {
 				return
 			}
 
-			// Удаляем и добавляем подписки между итерациями
-			ws.subscriptions.Rebalancing()
+			if event.Type == SystemType {
+				log.Printf("системное сообщение %+v\n", event)
+				continue
+			}
 
-			// Удаляем и добавляем подписчиков между итерациями
-			ws.subscribers.Rebalancing()
+			if event.Type != DataType {
+				log.Printf("неопознанное сообщение %+v\n", event)
+				continue
+			}
 
-			log.Println("length dequeue", ws.queue.GetLength())
+			subscriptionContainer, err := ws.subscriptions.Get(event.Guid)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
 
 			// Последовательное выполнение может занимать много времени - тогда заменить на асинхронные обработчики
 			// for _, subscriber := range ws.subscriptions.GetSubscriptionsByGUID(event.Guid) {
-			for _, subscriber := range ws.subscriptions[event.Guid].Items {
+			for subscriberID, _ := range subscriptionContainer.Items {
 				// Блокируем добавление/удаление любых подписчиков пока не пройдёт handle
 				// Никто не может поменять subscriptions во время вычисления
 				// Добавление или удаление из-за этого может занять продолжительное время
 
-				if subscriber == nil || subscriber.Done {
-					// Разблокируем удаление подписчиков
+				subscriber, err := ws.subscribers.Get(subscriberID)
+				if err != nil {
+					if errors.Is(err, ErrSubscriberNotFound) {
+						if err := ws.subscriptions.Delete(subscriberID, subscriptionContainer.Subscription.GUID); err != nil {
+							log.Println(err)
+						}
+					}
+
+					log.Println(err)
+					continue
+				}
+
+				// если подписчик помечен как завершённый
+				if subscriber.Done {
 					continue
 				}
 
@@ -465,23 +495,18 @@ func (ws *Websocket) SortQueue(ctx context.Context, token Token) {
 				// В каждом сабскрибере делать свой контекст с отменой от родительского. Отменять горутину когда сабскрибер будет удаляться.
 
 				// активируем подписку
-				if item, ok := ws.subscriptions[event.Guid]; ok {
+				if item, err := ws.subscriptions.Get(event.Guid); err != nil {
 					if !item.Active {
 						item.Active = true
-						ws.subscriptions[event.Guid] = item
+						ws.subscriptions.SetActive(event.Guid)
 					}
 				}
 
-				if event.Type == SystemType {
-					log.Printf("%+v\n", event)
+				if err := subscriber.HandleEvent(event); err != nil {
+					ws.subscribers.SetDone(subscriber.ID)
+					log.Println(subscriber.ID, "error in handle:", err)
 				}
 
-				if event.Type == DataType {
-					if err := subscriber.HandleEvent(event); err != nil {
-						subscriber.SetDone()
-						log.Println(subscriber.ID, "Error in handle:", err)
-					}
-				}
 			}
 		}
 	}
@@ -512,92 +537,93 @@ func (ws *Websocket) IsConnected() bool {
 	return err == nil
 }
 
+func (ws *Websocket) GetSubscriber(subscriberID SubscriberID) (*Subscriber, error) {
+	return ws.subscribers.Get(subscriberID)
+}
+
+func (ws *Websocket) GetSubscribers() (map[SubscriberID]*Subscriber, error) {
+	return ws.subscribers.All(), nil
+}
+
 func (ws *Websocket) AddSubscriber(token Token, subscriber *Subscriber) error {
 	log.Println("subscriber subscribe", subscriber.ID, "start subscriptions", subscriber)
 
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
-
+	// активируем все подписки
 	for _, subscription := range subscriber.Subscriptions {
-		// подписываемся в вебсокете
-		if err := ws.Subscribe(token, subscriber, subscription); err != nil {
+		// отправляем команду брокеру
+		if err := ws.Subscribe(token, subscriber.ID, subscription); err != nil {
 			return err
 		}
 
 		// добавляем подписчика в подписку
-		ws.subscriptions.Add(subscription)
-		// ws.subscriptions[subscription.Guid].Items[SubscriberID(subscriber.ID)] = subscriber
+		ws.subscriptions.Add(subscriber.ID, subscription)
 	}
 
 	log.Println("subscriber ", subscriber.ID, "init")
-	if subscriber.CustomHandler != nil {
-		if err := subscriber.CustomHandler.Init(); err != nil {
-			return err
-		}
-	}
+	//if subscriber.CustomHandler != nil {
+	//	if err := subscriber.CustomHandler.Init(); err != nil {
+	//		return err
+	//	}
+	//}
+
+	// Активируем стратегии
+	subscriber.Ready = true
+	log.Printf("subscriber %s ready to work", subscriber.ID)
 
 	// добавляем подписчика в список подписчиков
 	ws.subscribers.Add(subscriber)
-	// ws.subscribers[SubscriberID(subscriber.ID)] = subscriber
 
 	return nil
 }
 
-func (ws *Websocket) RemoveSubscriber(token string, subscriberID uuid.UUID) error {
+func (ws *Websocket) RemoveSubscriber(token string, subscriberID SubscriberID) error {
 	log.Println("subscriber unsubscribe", subscriberID, "stop subscriptions")
 
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
-
-	subscriber, ok := ws.subscribers.Get(SubscriberID(subscriberID))
-	if !ok {
+	subscriber, err := ws.subscribers.Get(SubscriberID(subscriberID))
+	if err != nil {
 		// TODO: Error
 		return nil
 	}
 
 	// Больше не принимает события
-	subscriber.SetDone()
+	ws.subscribers.SetDone(subscriber.ID)
 
 	// Отписывается от всех подписок
 	for _, subscription := range subscriber.Subscriptions {
-		if err := ws.Unsubscribe(token, subscriberID, subscription.Guid); err != nil {
+		if err := ws.Unsubscribe(token, subscriberID, subscription.GUID); err != nil {
 			return err
 		}
+
+		_ = ws.subscriptions.Delete(subscriber.ID, subscription.GUID)
 	}
 
-	if subscriber.CustomHandler != nil {
-		if err := subscriber.CustomHandler.DeInit(); err != nil {
-			return err
-		}
-	}
+	log.Println("subscriber ", subscriber.ID, "deinit")
+	//if subscriber.CustomHandler != nil {
+	//	if err := subscriber.CustomHandler.DeInit(); err != nil {
+	//		return err
+	//	}
+	//}
 
-	delete(ws.subscribers, SubscriberID(subscriberID))
+	ws.subscribers.Delete(subscriberID)
 
 	return nil
 }
 
-func (ws *Websocket) GetSubscriber(subscriberID uuid.UUID) (*Subscriber, error) {
-	subscriber, ok := ws.subscribers[SubscriberID(subscriberID)]
-	if !ok {
-		return nil, errors.New("subscriber not found")
-	}
-
-	return subscriber, nil
-}
-
 func (ws *Websocket) RemoveAllSubscribers(token string) error {
-	for _, subscriber := range ws.subscribers {
+	subscribers := ws.subscribers.All()
+
+	for _, subscriber := range subscribers {
 		_ = ws.RemoveSubscriber(token, subscriber.ID)
 	}
 
 	return nil
 }
 
-func (ws *Websocket) GetAllStrategyBars(subscriberID uuid.UUID) ([]*Bar, error) {
-	subscriber, ok := ws.subscribers[SubscriberID(subscriberID)]
-	if !ok {
-		return nil, errors.New("subscriber does not exist")
+func (ws *Websocket) GetAllStrategyBars(subscriberID SubscriberID) ([]*Bar, error) {
+	subscriber, err := ws.subscribers.Get(subscriberID)
+	if err != nil {
+		return nil, ErrSubscriberNotFound
 	}
 
-	return subscriber.Strategy.DataProcessor.bars.GetAllBars(), nil
+	return subscriber.DataProcessor.bars.GetAllBars()
 }

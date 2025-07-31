@@ -2,7 +2,6 @@ package alor
 
 import (
 	"context"
-	"github.com/google/uuid"
 	"log"
 	"net/http"
 	"sync"
@@ -91,7 +90,7 @@ func (c *Client) Stop() {
 	}
 }
 
-func (c *Client) GetSubscriber(subscriberID uuid.UUID) (*Subscriber, error) {
+func (c *Client) GetSubscriber(subscriberID SubscriberID) (*Subscriber, error) {
 	return c.Websocket.GetSubscriber(subscriberID)
 }
 
@@ -99,7 +98,7 @@ func (c *Client) AddSubscriber(subscriber *Subscriber) error {
 	return c.Websocket.AddSubscriber(c.Token, subscriber)
 }
 
-func (c *Client) RemoveSubscriber(subscriberID uuid.UUID) error {
+func (c *Client) RemoveSubscriber(subscriberID SubscriberID) error {
 	token, err := c.Token.GetAccessToken()
 	if err != nil {
 		return err
@@ -118,9 +117,19 @@ func (c *Client) RemoveAllSubscribers() error {
 }
 
 func (c *Client) GetSubscribers() []*Subscriber {
-	return c.Websocket.GetSubscribers()
+	subscribers, err := c.Websocket.GetSubscribers()
+	if err != nil {
+		return nil
+	}
+
+	subscribersList := make([]*Subscriber, 0, len(subscribers))
+	for _, subscriber := range subscribers {
+		subscribersList = append(subscribersList, subscriber)
+	}
+
+	return subscribersList
 }
 
-func (c *Client) GetAllSubscriberBars(subscriberID uuid.UUID) ([]*Bar, error) {
-	return c.Websocket.GetAllSubscriberBars(subscriberID)
+func (c *Client) GetAllSubscriberBars(subscriberID SubscriberID) ([]*Bar, error) {
+	return c.Websocket.GetAllStrategyBars(subscriberID)
 }

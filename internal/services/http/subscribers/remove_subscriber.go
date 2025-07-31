@@ -1,9 +1,9 @@
 package subscribers
 
 import (
-	"github.com/google/uuid"
+	"github.com/MarlyasDad/rd-hub-go/pkg/alor"
 )
 
-func (s Service) RemoveSubscriber(subscriberID uuid.UUID) error { // FromAlltrades
+func (s Service) RemoveSubscriber(subscriberID alor.SubscriberID) error { // FromAlltrades
 	return s.brokerClient.RemoveSubscriber(subscriberID)
 }

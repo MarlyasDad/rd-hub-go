@@ -6,7 +6,6 @@ import (
 	appconfig "github.com/MarlyasDad/rd-hub-go/internal/config"
 	tgBot "github.com/MarlyasDad/rd-hub-go/internal/infra/telegram"
 	"github.com/MarlyasDad/rd-hub-go/pkg/alor"
-	"github.com/MarlyasDad/rd-hub-go/pkg/logger"
 	"github.com/MarlyasDad/rd-hub-go/pkg/scheduler"
 	"go.uber.org/zap"
 	"log"
@@ -32,8 +31,8 @@ func NewApp(ctx context.Context, wg *sync.WaitGroup, config appconfig.Config) (*
 	slog.Info("Hi! I'm Right Decisions Hub! I'm starting...")
 
 	// Init a zap logger and add it as slog default logger
-	zapLog := logger.SetupZapLogger(config.Logger.DebugMode)
-	logger.SetSlogDefaultFromZap(zapLog)
+	//zapLog := logger.SetupZapLogger(config.Logger.DebugMode)
+	//logger.SetSlogDefaultFromZap(zapLog)
 	slog.Info("Logger setup successful")
 
 	//slog.Warn("APP started")
@@ -75,7 +74,7 @@ func NewApp(ctx context.Context, wg *sync.WaitGroup, config appconfig.Config) (*
 		scheduler:    sch,
 		brokerClient: alorClient,
 		httpServer:   httpServer,
-		zapLogger:    zapLog,
+		// zapLogger:    zapLog,
 		// tgBot:        bot,
 	}, nil
 }
@@ -146,7 +145,7 @@ func (a *App) Stop() error {
 
 	slog.Info("The RD-Hub completed correctly")
 
-	_ = a.zapLogger.Sync()
+	// _ = a.zapLogger.Sync()
 
 	return nil
 }
