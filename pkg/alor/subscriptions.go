@@ -20,7 +20,9 @@ type (
 		Subscription *Subscription
 		Active       bool
 		Items        map[SubscriberID]bool
-		//Items        map[SubscriberID]*Subscriber
+		//Subscriber SubscriberID
+		// Несколько подписок - один подписчик (1кМ)
+		// Вместо контейнера всё в подписке?
 	}
 
 	Subscriptions struct {
