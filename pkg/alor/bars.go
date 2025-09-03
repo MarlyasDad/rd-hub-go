@@ -80,17 +80,55 @@ type OrderBookRow struct {
 }
 
 type OrderFlow struct {
-	LastVal   map[string]OrderBookRow `json:"-"`
-	ValuesInc map[string]int64        `json:"values_inc"`
-	ValuesDec map[string]int64        `json:"values_dec"`
-	TotalInc  int64                   `json:"total_inc"`
-	TotalDec  int64                   `json:"total_dec"`
+	LastVal       map[string]OrderBookRow `json:"-"`
+	ValuesInc     map[string]int64        `json:"values_inc"`
+	ValuesDec     map[string]int64        `json:"values_dec"`
+	TotalInc      int64                   `json:"total_inc"` // Сколько лотов всего появилось
+	TotalDec      int64                   `json:"total_dec"` // Сколько лотов всего исчезло
+	LastAsks      map[string]OrderBookRow `json:"last_asks"`
+	ValuesAsksDec map[string]int64        `json:"values_asks_dec"`
+	ValuesAsksInc map[string]int64        `json:"values_asks_inc"`
+	TotalAsksInc  int64                   `json:"total_asks_inc"`
+	TotalAsksDec  int64                   `json:"total_asks_dec"`
+	LastBids      map[string]OrderBookRow `json:"last_bids"`
+	ValuesBidsDec map[string]int64        `json:"values_bids_dec"`
+	ValuesBidsInc map[string]int64        `json:"values_bids_inc"`
+	TotalBidsInc  int64                   `json:"total_bids_inc"`
+	TotalBidsDec  int64                   `json:"total_bids_dec"`
 }
 
 // Setters
 
 func (of *OrderFlow) AddValue(asks []OrderBookSlimQuote, bids []OrderBookSlimQuote) {
 	newVals := of.ConvertObToMap(asks, bids)
+	asksMap := of.ConvertOBSlimToMap(asks)
+	bidsMap := of.ConvertOBSlimToMap(bids)
+
+	// Выясняем куда сдвинулся стакан
+	minAsksMap := of.CalcAsksMin(asksMap)
+	minLastAsksMap := of.CalcAsksMin(of.LastAsks)
+	maxBidsMap := of.CalcBidsMax(bidsMap)
+	maxLastBidsMap := of.CalcBidsMax(of.LastBids)
+
+	if minAsksMap >= minLastAsksMap {
+		// Если стакан сдвинулся вверх или на месте, считаем asks
+
+		// Считаем asksMap на увеличение цены
+
+		// Считаем asksMap на уменьшение цены
+		of.CalcAsksMapDec(asksMap)
+	}
+
+	if maxBidsMap <= maxLastBidsMap {
+		// Если стакан сдвинулся вниз или на месте, считаем bids
+
+		// Считаем bidsMap на увеличение цены
+
+		// Считаем bidsMap на уменьшение цены
+		of.CalcBidsMapDec(bidsMap)
+	}
+
+	// Считаем общую активность по стакану
 
 	// Тут считаем order_blocks на увеличении цены
 	// Инкрементим всё, что появилось или увеличилось цикл по newVal
@@ -133,6 +171,8 @@ func (of *OrderFlow) AddValue(asks []OrderBookSlimQuote, bids []OrderBookSlimQuo
 	}
 
 	of.LastVal = newVals
+	of.LastBids = bidsMap
+	of.LastAsks = asksMap
 }
 
 func (of *OrderFlow) ConvertObToMap(asks []OrderBookSlimQuote, bids []OrderBookSlimQuote) map[string]OrderBookRow {
@@ -159,6 +199,97 @@ func (of *OrderFlow) ConvertObToMap(asks []OrderBookSlimQuote, bids []OrderBookS
 	}
 
 	return orderBook
+}
+
+func (of *OrderFlow) ConvertOBSlimToMap(rawOB []OrderBookSlimQuote) map[string]OrderBookRow {
+	orderBook := make(map[string]OrderBookRow)
+
+	for _, quote := range rawOB {
+		mapKey := Float64ToStringKey(quote.Price)
+
+		orderBook[mapKey] = OrderBookRow{
+			Price:  quote.Price,
+			Volume: quote.Volume,
+			Side:   BuySide,
+		}
+	}
+	return orderBook
+}
+
+func (of *OrderFlow) CalcAsksMapDec(asksMap map[string]OrderBookRow) {
+	// Тут считаем order_blocks на уменьшении цены
+	// Декрементим всё, что пропало или уменьшилось
+	for _, quote := range of.LastAsks {
+		mapKey := Float64ToStringKey(quote.Price)
+
+		newV, ok := asksMap[mapKey]
+		if !ok {
+			// Если значение пропало
+			of.TotalAsksDec += quote.Volume
+			of.ValuesAsksDec[mapKey] += quote.Volume
+		} else {
+			// Если значение уменьшилось
+			if newV.Volume < quote.Volume {
+				deltaVolume := quote.Volume - newV.Volume
+				of.TotalAsksDec += deltaVolume
+				of.ValuesAsksDec[mapKey] += deltaVolume
+			}
+		}
+	}
+}
+
+func (of *OrderFlow) CalcBidsMapDec(bidsMap map[string]OrderBookRow) {
+	// Тут считаем order_blocks на уменьшении цены
+	// Декрементим всё, что пропало или уменьшилось
+	for _, quote := range of.LastBids {
+		mapKey := Float64ToStringKey(quote.Price)
+
+		newV, ok := bidsMap[mapKey]
+		if !ok {
+			// Если значение пропало
+			of.TotalBidsDec += quote.Volume
+			of.ValuesBidsDec[mapKey] += quote.Volume
+		} else {
+			// Если значение уменьшилось
+			if newV.Volume < quote.Volume {
+				deltaVolume := quote.Volume - newV.Volume
+				of.TotalBidsDec += deltaVolume
+				of.ValuesBidsDec[mapKey] += deltaVolume
+			}
+		}
+	}
+}
+
+func (of *OrderFlow) CalcAsksMin(asksMap map[string]OrderBookRow) float64 {
+	var minPrice float64
+
+	for _, quote := range asksMap {
+		if minPrice == 0 {
+			minPrice = quote.Price
+		}
+
+		if quote.Price < minPrice {
+			minPrice = quote.Price
+		}
+	}
+
+	return minPrice
+}
+
+func (of *OrderFlow) CalcBidsMax(bidsMap map[string]OrderBookRow) float64 {
+	var maxPrice float64
+
+	for _, quote := range bidsMap {
+		if maxPrice == 0 {
+			maxPrice = quote.Price
+		}
+
+		if quote.Price > maxPrice {
+			maxPrice = quote.Price
+		}
+	}
+
+	return maxPrice
 }
 
 func Float64ToStringKey(value float64) string {

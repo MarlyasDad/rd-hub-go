@@ -47,16 +47,17 @@ func (p *DataProcessor) NewAllTrades(data AllTradesSlimData) error {
 
 	// Создаём бар если его нет или пришёл новый
 	if p.lastBar == nil || p.lastBar.Time != eventBarTime {
-		newBar := p.NewBarFromAllTradesData(eventBarTime, data)
+		// newBar := p.NewBarFromAllTradesData(eventBarTime, data)
 
+		newBar := p.NewBlankBar(eventBarTime)
+		// Добавляем бар в хранилище
 		err := p.bars.Enqueue(newBar)
 		if err != nil {
 			return err
 		}
-
 		p.lastBar = newBar
 
-		return nil
+		// return nil
 	}
 
 	// Заполняем текущий бар
@@ -72,46 +73,6 @@ func (p *DataProcessor) NewAllTrades(data AllTradesSlimData) error {
 	}
 
 	return nil
-}
-
-func (p *DataProcessor) NewBarFromAllTradesData(eventBarTime time.Time, data AllTradesSlimData) *Bar {
-	newBar := &Bar{
-		Timestamp: eventBarTime.Unix(),
-		Time:      eventBarTime,
-		Open:      data.Price,
-		High:      data.Price,
-		Low:       data.Price,
-		Close:     data.Price,
-		Volume:    data.Qty,
-		Delta: Delta{
-			Buy:   0,
-			Sell:  0,
-			Total: 0,
-		},
-		MarketProfile: MarketProfile{
-			POCVolume: 0,
-			POCPrice:  0.0,
-			Values:    make(map[string]MarketProfileUnit),
-		},
-		OrderFlow: OrderFlow{
-			LastVal:   make(map[string]OrderBookRow),
-			ValuesInc: make(map[string]int64),
-			ValuesDec: make(map[string]int64),
-			TotalInc:  0,
-			TotalDec:  0,
-		},
-	}
-
-	// Считаем дополнительные данные
-	if p.detailing.delta {
-		newBar.Delta.AddValue(data.Qty, data.Side)
-	}
-
-	if p.detailing.marketProfile {
-		newBar.MarketProfile.AddValue(data.Price, data.Qty, data.Side)
-	}
-
-	return newBar
 }
 
 func (p *DataProcessor) UpdateBarFromAllTradesData(lastBar *Bar, data AllTradesSlimData) {
@@ -181,32 +142,15 @@ func (p *DataProcessor) NewBar(data BarsSlimData) error {
 }
 
 func (p *DataProcessor) NewBarFromBarData(eventBarTime time.Time, data BarsSlimData) *Bar {
-	newBar := &Bar{
-		Timestamp: data.Time,
-		Time:      eventBarTime,
-		Open:      data.Open,
-		High:      data.High,
-		Low:       data.Low,
-		Close:     data.Close,
-		Volume:    data.Volume,
-		Delta: Delta{
-			Buy:   0,
-			Sell:  0,
-			Total: 0,
-		},
-		MarketProfile: MarketProfile{
-			POCVolume: 0,
-			POCPrice:  0.0,
-			Values:    make(map[string]MarketProfileUnit),
-		},
-		OrderFlow: OrderFlow{
-			LastVal:   make(map[string]OrderBookRow),
-			ValuesInc: make(map[string]int64),
-			ValuesDec: make(map[string]int64),
-			TotalInc:  0,
-			TotalDec:  0,
-		},
-	}
+	newBar := p.NewBlankBar(eventBarTime)
+
+	newBar.Timestamp = data.Time
+	newBar.Time = eventBarTime
+	newBar.Open = data.Open
+	newBar.High = data.High
+	newBar.Low = data.Low
+	newBar.Close = data.Close
+	newBar.Volume = data.Volume
 
 	return newBar
 }
@@ -238,42 +182,21 @@ func (p *DataProcessor) NewBlankBar(eventBarTime time.Time) *Bar {
 			Values:    make(map[string]MarketProfileUnit),
 		},
 		OrderFlow: OrderFlow{
-			LastVal:   make(map[string]OrderBookRow),
-			ValuesInc: make(map[string]int64),
-			ValuesDec: make(map[string]int64),
-			TotalInc:  0,
-			TotalDec:  0,
-		},
-	}
-
-	return newBar
-}
-
-func (p *DataProcessor) NewBlankBarFromPrevious(eventBarTime time.Time, barClose float64) *Bar {
-	newBar := &Bar{
-		Timestamp: eventBarTime.Unix(),
-		Time:      eventBarTime,
-		Open:      barClose,
-		High:      barClose,
-		Low:       barClose,
-		Close:     barClose,
-		Volume:    0,
-		Delta: Delta{
-			Buy:   0,
-			Sell:  0,
-			Total: 0,
-		},
-		MarketProfile: MarketProfile{
-			POCVolume: 0,
-			POCPrice:  0.0,
-			Values:    make(map[string]MarketProfileUnit),
-		},
-		OrderFlow: OrderFlow{
-			LastVal:   make(map[string]OrderBookRow),
-			ValuesInc: make(map[string]int64),
-			ValuesDec: make(map[string]int64),
-			TotalInc:  0,
-			TotalDec:  0,
+			LastVal:       make(map[string]OrderBookRow),
+			ValuesInc:     make(map[string]int64),
+			ValuesDec:     make(map[string]int64),
+			TotalInc:      0,
+			TotalDec:      0,
+			LastAsks:      make(map[string]OrderBookRow),
+			ValuesAsksDec: make(map[string]int64),
+			ValuesAsksInc: make(map[string]int64),
+			TotalAsksInc:  0,
+			TotalAsksDec:  0,
+			LastBids:      make(map[string]OrderBookRow),
+			ValuesBidsDec: make(map[string]int64),
+			ValuesBidsInc: make(map[string]int64),
+			TotalBidsInc:  0,
+			TotalBidsDec:  0,
 		},
 	}
 
